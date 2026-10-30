@@ -1,0 +1,17 @@
+{
+  "name": "taom-banner-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "atlas": "node build-atlas.mjs",
+    "extract": "dotnet run --project extractor/Extractor.csproj --configuration Release -- config.json",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "ag-psd": "^34.1.0",
+    "fast-xml-parser": "^5.11.2",
+    "sharp": "^0.35.5"
+  }
+}

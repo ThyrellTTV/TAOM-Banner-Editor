@@ -1,0 +1,15 @@
+node_modules/
+.tools/
+cache/
+backups/
+drafts/
+logs/
+extractor/bin/
+extractor/obj/
+research/*.cs
+desktop-shell/bin/
+desktop-shell/obj/
+app/
+app-logo-staging/
+exports/
+atlas-builds/
