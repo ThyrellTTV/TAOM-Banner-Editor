@@ -98,9 +98,9 @@ export async function preparePng(file,{padding=0,outline=0,mode='alpha'}={}) {
   if(opaque&&mode==='alpha')warnings.push('PNG is fully opaque: its entire rectangle becomes the symbol. Use a transparent PNG or a black/white mask mode for a cutout.');
   return {name:path.basename(file.name),gameMask,width:outputWidth,height:outputHeight,source,originalSize:{width,height},trimmedBounds:bounds,scale:factor,subpixelShift:{x:centred.shiftX,y:centred.shiftY},warnings};
 }
-async function availableStart(sourceDirectory,faction,category,requested,materials=[]) {
+async function availableStart(sourceDirectory,faction,category,requested,materials=[],atlasPrefix='taom_banners') {
   const names=await fs.readdir(sourceDirectory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
-  const prefix='taom_banners_'+faction+'_'+category+'_';
+  const prefix=atlasPrefix+'_'+faction+'_'+category+'_';
   const used=[...names.filter(n=>n.endsWith('.psd')).map(n=>n.slice(0,-4)),...materials].filter(n=>n.startsWith(prefix)).map(n=>Number(n.slice(prefix.length))).filter(Number.isInteger);
   if(requested!==undefined&&(!Number.isInteger(requested)||requested<1||requested>9999))throw new Error('Atlas number must be a whole number from 1 to 9999.');
   return requested??Math.max(0,...used)+1;
@@ -123,7 +123,7 @@ async function transparentThumbnail(art){
 // Render an explicitly mapped page without changing XML texture indexes.
 // Used by both the new-atlas importer and registered-atlas regeneration.
 export async function writeAtlasPage({name,files,directory,padding=0,outline=0,mode='alpha',sourceOffset=0}) {
-  if(!/^taom_banners_[a-z0-9_]+$/.test(name))throw new Error('Invalid atlas material name.');
+  if(!/^[a-z][a-z0-9_]+$/.test(name))throw new Error('Invalid atlas material name.');
   if(!files.length||files.length>16)throw new Error('An atlas needs between 1 and 16 symbols.');
   const slots=files.map((file,index)=>file.textureIndex??index);
   if(slots.some(slot=>!Number.isInteger(slot)||slot<0||slot>15)||new Set(slots).size!==slots.length)throw new Error('Atlas texture indexes must be unique integers from 0 to 15.');
@@ -166,7 +166,7 @@ export async function writeAtlasPage({name,files,directory,padding=0,outline=0,m
   return {name,psd:name+'.psd',mask:name+'.mask.png',preview:name+'.preview.png',cells,installedPath:null};
 }
 
-export async function buildAtlases({files,faction,category,outputDirectory,sourceDirectory,modulePath,gamePath,install=true,padding=0,outline=0,mode='alpha',startIndex}) {
+export async function buildAtlases({files,faction,category,outputDirectory,sourceDirectory,modulePath,gamePath,install=true,padding=0,outline=0,mode='alpha',startIndex,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix='taom_banners',groupLabel='TAOM'}) {
   faction=factionSlug(faction);category=categoryName(category);
   if(!Array.isArray(files)||!files.length||files.length>128)throw new Error('Choose between 1 and 128 PNGs. Extra images automatically start another 4×4 atlas.');
   if(!Number.isInteger(padding)||padding<0||padding>128)throw new Error('Padding must be between 0 and 128 pixels.');
@@ -175,14 +175,14 @@ export async function buildAtlases({files,faction,category,outputDirectory,sourc
   if(CELL_SIZE-2*padding-2*outline<2)throw new Error('Padding and outline leave no room for artwork.');
   if(!sourceDirectory)throw new Error('A module banner source directory is required.');
   modulePath=path.resolve(modulePath||path.join(sourceDirectory,'..','..'));
-  if(path.resolve(sourceDirectory)!==path.join(modulePath,'AssetSources','BannerIcons'))throw new Error('Banner source directory must belong to the selected module.');
-  const registry=await readIconRegistry(modulePath);
-  const index=await availableStart(sourceDirectory,faction,category,startIndex,registry.materials);
+  if(!/^[a-z][a-z0-9_]{0,79}$/.test(atlasPrefix))throw new Error('Invalid atlas naming prefix.');
+  const registry=await readIconRegistry(modulePath,registryFile);
+  const index=await availableStart(sourceDirectory,faction,category,startIndex,registry.materials,atlasPrefix);
   const batchId=new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomUUID().slice(0,8);
   const directory=path.join(path.resolve(outputDirectory),batchId);
   const total=Math.ceil(files.length/CELLS_PER_ATLAS);
-  const planned=Array.from({length:total},(_,i)=>`taom_banners_${faction}_${category}_${String(index+i).padStart(2,'0')}`);
-  const registration=await planAtlasRegistration({modulePath,gamePath,registry,atlases:planned.map((name,page)=>({name,count:Math.min(16,files.length-page*16)}))});
+  const planned=Array.from({length:total},(_,i)=>`${atlasPrefix}_${faction}_${category}_${String(index+i).padStart(2,'0')}`);
+  const registration=await planAtlasRegistration({modulePath,gamePath,registry,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix,groupLabel,atlases:planned.map((name,page)=>({name,count:Math.min(16,files.length-page*16)}))});
   if(install)for(const name of planned)if(await fs.stat(path.join(sourceDirectory,name+'.psd')).catch(()=>null))throw new Error('Atlas already exists: '+name+'.psd. Choose a new atlas number.');
   // Validate every input before creating any output or copying module files.
   for(const file of files){const meta=await sharp(file.data,{limitInputPixels:MAX_PIXELS}).metadata();if(meta.format!=='png')throw new Error(file.name+': only PNG files are supported.');}

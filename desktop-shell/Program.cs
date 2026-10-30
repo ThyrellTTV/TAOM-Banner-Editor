@@ -38,8 +38,10 @@ internal sealed class StudioWindow : Form
             while(folder != null && !File.Exists(Path.Combine(folder.FullName,"server.mjs"))) folder = folder.Parent;
             if(folder == null) throw new Exception("Could not find server.mjs beside the application folder.");
             var root = folder.FullName;
-            var config = JsonDocument.Parse(File.ReadAllText(Path.Combine(root,"config.json"))).RootElement;
-            var port = config.GetProperty("port").GetInt32();
+            var port = 4318;
+            var configPath=Environment.GetEnvironmentVariable("BANNER_STUDIO_CONFIG")??Path.Combine(root,"config.json");
+            if(File.Exists(configPath))try{var config=JsonDocument.Parse(File.ReadAllText(configPath)).RootElement;if(config.TryGetProperty("port",out var configuredPort))if(configuredPort.TryGetInt32(out var number)&&number>=1024&&number<=65535)port=number;}catch(JsonException){}
+            if(int.TryParse(Environment.GetEnvironmentVariable("BANNER_STUDIO_PORT")??Environment.GetEnvironmentVariable("TAOM_EDITOR_PORT"),out var overridePort))port=overridePort;
             var url = $"http://127.0.0.1:{port}";
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
             async Task<bool> Ready()
@@ -50,7 +52,8 @@ internal sealed class StudioWindow : Form
             if(!await Ready())
             {
                 Directory.CreateDirectory(Path.Combine(root,"logs"));
-                var node = new ProcessStartInfo("node", "server.mjs") { WorkingDirectory=root, UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true, RedirectStandardError=true };
+                var bundledNode=Path.Combine(root,"runtime","node.exe");
+                var node = new ProcessStartInfo(File.Exists(bundledNode)?bundledNode:"node", "server.mjs") { WorkingDirectory=root, UseShellExecute=false, CreateNoWindow=true, RedirectStandardOutput=true, RedirectStandardError=true };
                 _server = Process.Start(node) ?? throw new Exception("Could not start Node.js.");
                 var logPath = Path.Combine(root,"logs","desktop-server.log");
                 var logLock = new object();
@@ -69,6 +72,25 @@ internal sealed class StudioWindow : Form
             var userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"TAOMBannerStudio","WebView2");
             var environment = await CoreWebView2Environment.CreateAsync(null,userData);
             await _web.EnsureCoreWebView2Async(environment);
+            _web.CoreWebView2.WebMessageReceived += (_,e)=>{
+                try{
+                    if(new Uri(e.Source).GetLeftPart(UriPartial.Authority)!=url)return;
+                    var message=JsonDocument.Parse(e.WebMessageAsJson).RootElement;
+                    if(message.GetProperty("type").GetString()!="browse-path")return;
+                    var field=message.GetProperty("field").GetString();
+                    var allowed=new[]{"modulePath","gamePath","installedModulePath","bannerIconsFile","nativeBannerIconsFile","atlasSourceDirectory","thumbnailDirectory","nativeAssetDirectory","dataDirectory"};
+                    if(!allowed.Contains(field))return;
+                    string? selected=null;
+                    if(message.GetProperty("kind").GetString()=="file"){
+                        using var picker=new OpenFileDialog{Filter="XML files (*.xml)|*.xml|All files (*.*)|*.*",CheckFileExists=true};
+                        if(picker.ShowDialog(this)==DialogResult.OK)selected=picker.FileName;
+                    }else{
+                        using var picker=new FolderBrowserDialog{Description="Choose "+field,UseDescriptionForTitle=true};
+                        if(picker.ShowDialog(this)==DialogResult.OK)selected=picker.SelectedPath;
+                    }
+                    if(selected!=null)_web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new{type="selected-path",field,path=selected}));
+                }catch(Exception error){MessageBox.Show(this,error.Message,"Choose path",MessageBoxButtons.OK,MessageBoxIcon.Information);}
+            };
             _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
             _web.CoreWebView2.Settings.IsZoomControlEnabled = false;

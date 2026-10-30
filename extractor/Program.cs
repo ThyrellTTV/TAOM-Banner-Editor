@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Xml.Linq;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -16,29 +17,39 @@ class Program
         var config = JsonDocument.Parse(File.ReadAllText(configPath)).RootElement;
         var module = config.GetProperty("modulePath").GetString()!;
         var game = config.GetProperty("gamePath").GetString()!;
-        var cache = Path.Combine(root, "cache");
+        string Setting(string key,string fallback) => config.TryGetProperty(key,out var value) && value.ValueKind==JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString()! : fallback;
+        string Resolve(string folder,string file) => Path.GetFullPath(Path.Combine(folder,file));
+        var dataRoot=Resolve(root,Setting("dataDirectory","."));
+        var cache = Path.Combine(dataRoot, "cache");
         Directory.CreateDirectory(Path.Combine(cache, "textures"));
         var textures = new Dictionary<string, object>();
         var materials = new Dictionary<string, object>();
         var meshes = new Dictionary<string, object>();
         var errors = new List<string>();
         var files = new List<string>();
-        var native = Path.Combine(game, "Modules", "Native", "AssetPackages");
+        var registryFiles=new[]{Resolve(game,Setting("nativeBannerIconsFile","Modules/Native/ModuleData/banner_icons.xml")),Resolve(module,Setting("bannerIconsFile","ModuleData/banner_icons.xml"))};
+        var materialNames=new HashSet<string>();var backgroundNames=new HashSet<string>();
+        foreach(var registry in registryFiles){var doc=XDocument.Load(registry);foreach(var icon in doc.Descendants("Icon")){var name=(string)icon.Attribute("material_name");if(name!=null)materialNames.Add(name);}foreach(var bg in doc.Descendants("Background")){var name=(string)bg.Attribute("mesh_name");if(name!=null)backgroundNames.Add(name);}}
+        var native = Resolve(game,Setting("nativeAssetDirectory","Modules/Native/AssetPackages"));
         if (Directory.Exists(native)) files.AddRange(Directory.GetFiles(native, "*.tpac"));
-        var custom = Path.Combine(module, "Assets", "BannerIcons");
-        if (Directory.Exists(custom)) files.AddRange(Directory.GetFiles(custom, "*.tpac", SearchOption.AllDirectories));
-        var runtime = Path.Combine(module, "AssetPackages");
-        if (Directory.Exists(runtime)) files.AddRange(Directory.GetFiles(runtime, "*.tpac", SearchOption.AllDirectories));
+        var packagePaths=config.TryGetProperty("assetPackagePaths",out var paths)?paths.EnumerateArray().Select(p=>p.GetString()!).ToArray():new[]{"Assets","AssetPackages"};
+        foreach(var folder in packagePaths){var location=Resolve(module,folder);if(Directory.Exists(location))files.AddRange(Directory.GetFiles(location,"*.tpac",SearchOption.AllDirectories));else if(File.Exists(location))files.Add(location);}
+        files=files.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        // Resolve texture dependencies by GUID; other mods need not use the same
+        // naming convention for their materials and diffuse textures.
+        var indexes=new Dictionary<string,AssetPackage>();var requiredTextures=new HashSet<Guid>();
+        foreach(var file in files){try{indexes[file]=new AssetPackage(file,true,false,indexOnly:true);var mats=new AssetPackage(file,true,false,assetFilter:(type,name)=>type==Material.TYPE_GUID&&materialNames.Contains(name));foreach(var material in mats.Items.OfType<Material>())foreach(var slot in material.Textures.Values)requiredTextures.Add(slot.Guid);}catch(Exception e){errors.Add(Path.GetFileName(file)+": "+e.Message);}}
+        var textureNames=indexes.Values.SelectMany(p=>p.Items).Where(item=>item.Type==Texture.TYPE_GUID&&requiredTextures.Contains(item.Guid)).Select(item=>item.Name).ToHashSet();
         foreach (var file in files)
         {
             Console.WriteLine("Reading " + Path.GetFileName(file));
             try
             {
-                var index = new AssetPackage(file, true, false, indexOnly: true, assetFilter: (type, name) => name.Contains("banner", StringComparison.OrdinalIgnoreCase));
+                var index = indexes[file];
                 File.WriteAllText(Path.Combine(cache, "index-" + Path.GetFileName(file) + ".json"), JsonSerializer.Serialize(index.Items.Select(i => new { i.Name, i.Type, i.Guid })));
                 var package = new AssetPackage(file, true, false, assetFilter: (type, name) =>
-                    ((type == Texture.TYPE_GUID || type == Material.TYPE_GUID) && (name.StartsWith("custom_banner_icons") || name.StartsWith("taom_banners_"))) ||
-                    (type == Metamesh.TYPE_GUID && name.StartsWith("banner_background")));
+                    (type == Texture.TYPE_GUID && textureNames.Contains(name)) || (type==Material.TYPE_GUID&&materialNames.Contains(name)) ||
+                    (type == Metamesh.TYPE_GUID && backgroundNames.Contains(name)));
                 if (Path.GetFileName(file).Equals("Banner.tpac", StringComparison.OrdinalIgnoreCase))
                     File.WriteAllText(Path.Combine(cache, "native-index.json"), JsonSerializer.Serialize(package.Items.Select(i => new { i.Name, type = i.GetType().Name, i.Guid })));
                 foreach (var item in package.Items)
@@ -50,7 +61,7 @@ class Program
                             var images = new List<string>();
                             for (int layer = 0; texture.HasPixelData && layer < texture.ArrayCount; layer++)
                             {
-                                var name = $"{texture.Guid:N}_{layer}.png";
+                                var name = $"{Setting("cacheNamespace","default")}_{texture.Guid:N}_{layer}.png";
                                 var output = Path.Combine(cache, "textures", name);
                                 if (!File.Exists(output) || File.GetLastWriteTimeUtc(output) < File.GetLastWriteTimeUtc(file))
                                 {
@@ -85,7 +96,7 @@ class Program
                         {
                             materials[material.Name] = new { guid = material.Guid, slots = material.Textures.ToDictionary(p => p.Key.ToString(), p => p.Value.Guid.ToString()), flags = material.ShaderMaterialFlags, alphaTest = material.AlphaTest, blendMode = material.BlendMode };
                         }
-                        else if (item is Metamesh model && model.Name.StartsWith("banner_background"))
+                        else if (item is Metamesh model && backgroundNames.Contains(model.Name))
                         {
                             meshes[model.Name] = model.Meshes.Where(m => m.Lod == 0).Select(m =>
                             {

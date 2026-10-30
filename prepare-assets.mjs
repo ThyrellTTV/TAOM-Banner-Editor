@@ -2,11 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { readPsd, initializeCanvas } from 'ag-psd';
 import sharp from 'sharp';
+import {createHash} from 'node:crypto';
 initializeCanvas(undefined, (width,height) => ({width,height,data:new Uint8ClampedArray(width*height*4)}));
-export async function prepareSourceTextures(root, assets, modulePath, icons=[]) {
+export async function prepareSourceTextures(root, assets, modulePath, icons=[],options={}) {
   // Newly registered PSDs can be previewed before their game material is compiled.
   for(const icon of icons){
-    if(icon.source!=='TAOM'||!/^taom_banners_[a-z0-9_]+$/.test(icon.material))continue;
+    if(icon.source==='Native'||!/^[-a-z0-9_]+$/i.test(icon.material))continue;
     const material=assets.materials[icon.material];
     if(assets.textures[material?.slots?.['0']])continue;
     const guid='source-'+icon.material;
@@ -14,11 +15,12 @@ export async function prepareSourceTextures(root, assets, modulePath, icons=[]) 
     assets.textures[guid]??={name:icon.material,images:[]};
   }
   for (const [guid, texture] of Object.entries(assets.textures)) {
-    if (texture.images.length || !texture.name.startsWith('taom_banners_')) continue;
-    const source = path.join(modulePath, 'AssetSources', 'BannerIcons', texture.name + '.psd');
+    if (texture.images.length || !/^[-a-z0-9_]+$/i.test(texture.name)) continue;
+    const source = path.resolve(modulePath,options.atlasSourceDirectory||'AssetSources/BannerIcons',texture.name+'.psd');
     try {
       const stat = await fs.stat(source);
-      const file = path.join(root, 'cache', 'textures', guid.replaceAll('-','') + '_source.png');
+      const sourceId=createHash('sha256').update(source).digest('hex').slice(0,12);
+      const file = path.join(root, 'cache', 'textures', guid.replaceAll('-','') + '_'+sourceId+'_source.png');
       const cached = await fs.stat(file).catch(() => null);
       if (!cached || cached.mtimeMs < stat.mtimeMs) {
         const psd = readPsd(await fs.readFile(source), { useImageData: true, skipLayerImageData: true, skipThumbnail: true });

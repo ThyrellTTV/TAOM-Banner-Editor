@@ -6,6 +6,7 @@ import {XMLParser} from 'fast-xml-parser';
 import sharp from 'sharp';
 import {readPsd} from 'ag-psd';
 import {writeAtlasPage,ATLAS_SIZE,CELL_SIZE} from './atlas-builder.mjs';
+import {readConfig,normalizeConfig,configPaths} from './configuration.mjs';
 
 const hash=data=>createHash('sha256').update(data).digest('hex');
 const hashFile=async file=>hash(await fs.readFile(file));
@@ -17,7 +18,7 @@ export function registeredAtlases(xml) {
   for(const group of array(parsed.base?.BannerIconData?.BannerIconGroup))for(const icon of array(group.Icon)){
     const id=String(icon.id),name=String(icon.material_name),textureIndex=Number(icon.texture_index);
     if(!/^\d+$/.test(id)||ids.has(id))throw new Error('Invalid or duplicate icon ID: '+id);
-    if(!/^taom_banners_[a-z0-9_]+$/.test(name))throw new Error('Unexpected material: '+name);
+    if(!/^[a-z][a-z0-9_]+$/.test(name))throw new Error('Unexpected material: '+name);
     if(!Number.isInteger(textureIndex)||textureIndex<0||textureIndex>15)throw new Error('Invalid texture index for '+id);
     ids.add(id);
     if(!materials.has(name))materials.set(name,[]);
@@ -47,12 +48,12 @@ export async function verifyRegisteredPage(file,icons) {
   return true;
 }
 
-export async function regenerateAtlases({modulePath,thumbnailDirectories,outputDirectory,onProgress=()=>{}}) {
+export async function regenerateAtlases({modulePath,thumbnailDirectories,outputDirectory,registryFile='ModuleData/banner_icons.xml',sourceDirectory='AssetSources/BannerIcons',onProgress=()=>{}}) {
   modulePath=path.resolve(modulePath);
   if(!thumbnailDirectories?.length)throw new Error('At least one thumbnail directory is required.');
-  const xmlPath=path.join(modulePath,'ModuleData','banner_icons.xml'),xml=await fs.readFile(xmlPath);
+  const xmlPath=path.resolve(modulePath,registryFile),xml=await fs.readFile(xmlPath);
   const plans=registeredAtlases(xml.toString('utf8'));
-  const sourceDirectory=path.join(modulePath,'AssetSources','BannerIcons');
+  sourceDirectory=path.resolve(modulePath,sourceDirectory);
   const directories=await Promise.all(thumbnailDirectories.map(async dir=>({path:path.resolve(dir),names:new Set(await fs.readdir(dir))})));
   const sourceUse={};
   // Resolve every source before building any page. First directory wins.
@@ -148,13 +149,16 @@ if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.ur
       const arg=args[i];
       if(arg==='--install')install=true;
       else if(arg==='--module')options.modulePath=args[++i];
+      else if(arg==='--config')options.config=args[++i];
       else if(arg==='--input')options.thumbnailDirectories.push(args[++i]);
       else if(arg==='--output')options.outputDirectory=args[++i];
       else if(arg==='--install-build')installBuild=args[++i];
       else throw new Error('Usage: node regenerate-atlases.mjs --input <primary-folder> [--input <fallback-folder>] [--module <module>] [--output <folder>] [--install], or --install-build <verified-build>');
     }
-    options.modulePath??=JSON.parse(await fs.readFile(new URL('./config.json',import.meta.url),'utf8')).modulePath;
-    options.outputDirectory??=fileURLToPath(new URL('./atlas-builds',import.meta.url));options.onProgress=console.log;
+    const root=path.dirname(fileURLToPath(import.meta.url));
+    const loaded=await readConfig(root,options.config?path.resolve(options.config):undefined);if(loaded.error&&!installBuild)throw new Error(loaded.error);
+    if(!installBuild){const config=normalizeConfig({...loaded.config,modulePath:options.modulePath||loaded.config.modulePath},root),p=configPaths(config,root);options.modulePath=config.modulePath;options.registryFile=p.registry;options.sourceDirectory=p.atlasSources;options.outputDirectory??=path.join(p.data,'atlas-builds');}
+    options.onProgress=console.log;
     let result=installBuild?await installRegeneration(installBuild,{onProgress:console.log}):await regenerateAtlases(options);
     if(install&&!installBuild)result=await installRegeneration(result.directory,{onProgress:console.log});
     console.log(JSON.stringify({status:result.status,atlases:result.atlases.length,icons:result.atlases.reduce((n,a)=>n+a.cells.length,0),sourceUse:result.sourceUse,directory:result.directory,backupDirectory:result.backupDirectory},null,2));

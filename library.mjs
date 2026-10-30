@@ -13,9 +13,9 @@ export async function walk(dir) {
   }
   return result;
 }
-export async function loadLibrary(modulePath, gamePath) {
+export async function loadLibrary(modulePath, gamePath,options={}) {
   const icons = new Map(), backgrounds = new Map(), colors = new Map(), groups = [];
-  for (const [source, file] of [['Native',path.join(gamePath,'Modules','Native','ModuleData','banner_icons.xml')],['TAOM',path.join(modulePath,'ModuleData','banner_icons.xml')]]) {
+  for (const [source, file] of [['Native',path.resolve(gamePath,options.nativeBannerIconsFile||'Modules/Native/ModuleData/banner_icons.xml')],['Module',path.resolve(modulePath,options.bannerIconsFile||'ModuleData/banner_icons.xml')]]) {
     const doc = parser.parse(await fs.readFile(file, 'utf8')).base;
     for (const group of list(doc.BannerIconData.BannerIconGroup)) {
       const g = { id: Number(group.id), name: displayName(group.name), source, pattern: group.is_pattern === 'true' };
@@ -29,7 +29,12 @@ export async function loadLibrary(modulePath, gamePath) {
     }
   }
   const banners = [];
-  for (const file of await walk(path.join(modulePath,'ModuleData'))) {
+  const definitionFiles=new Set();
+  for(const location of options.bannerDefinitionPaths||['ModuleData']){
+    const file=path.resolve(modulePath,location),stat=await fs.stat(file);
+    for(const item of stat.isDirectory()?await walk(file):[file])definitionFiles.add(item);
+  }
+  for (const file of definitionFiles) {
     let doc;
     try { doc = parser.parse(await fs.readFile(file,'utf8')); } catch { continue; }
     const visit = (value, tag) => {
@@ -67,6 +72,17 @@ export async function loadLibrary(modulePath, gamePath) {
 const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function replaceBannerAttribute(xml, entry, newCode, expectedCode) {
   decode(newCode);
+  return transformBannerAttribute(xml,entry,code=>{
+    if(code.trim()!==expectedCode)throw new Error('The source banner changed on disk. Reload it before saving.');
+    return newCode;
+  });
+}
+export function readBannerAttribute(xml,entry){
+  let code;
+  transformBannerAttribute(xml,entry,value=>{code=value.trim();return value;});
+  return code;
+}
+function transformBannerAttribute(xml,entry,transform){
   if(entry.format==='xslt-attribute') {
     let matches=0;
     const changed=xml.replace(/<xsl:template\b(?![^>]*\/>)[^>]*>(?:(?!<xsl:template\b)[\s\S])*?<\/xsl:template>/g,block=>{
@@ -74,8 +90,7 @@ export function replaceBannerAttribute(xml, entry, newCode, expectedCode) {
       if(match?.[2]!==entry.templateMatch)return block;
       const expression=new RegExp('(<xsl:attribute\\s+name=["\']'+entry.attribute+'["\']\\s*>)([\\s\\S]*?)(<\\/xsl:attribute>)','g');
       return block.replace(expression,(_,start,code,end)=>{
-        if(code.trim()!==expectedCode)throw new Error('The source banner changed on disk. Reload it before saving.');
-        matches++;return start+newCode+end;
+        matches++;return start+transform(code)+end;
       });
     });
     if(matches!==1)throw new Error('Expected exactly one matching XSLT banner; found '+matches+'.');
@@ -89,9 +104,8 @@ export function replaceBannerAttribute(xml, entry, newCode, expectedCode) {
     const attribute = new RegExp('(\\b' + entry.attribute + '\\s*=\\s*)(["\'])(.*?)\\2');
     const old = opening.match(attribute);
     if (!old) return opening;
-    if (old[3] !== expectedCode) throw new Error('The source banner changed on disk. Reload it before saving.');
     matches++;
-    return opening.replace(attribute, (_,prefix,quote) => prefix + quote + newCode + quote);
+    return opening.replace(attribute, (_,prefix,quote) => prefix + quote + transform(old[3]) + quote);
   });
   if (matches !== 1) throw new Error('Expected exactly one matching source banner; found ' + matches + '.');
   return changed;

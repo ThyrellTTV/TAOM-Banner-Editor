@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "modulePath": "",
+  "gamePath": "",
+  "moduleName": "",
+  "port": 4318,
+  "installedModulePath": "",
+  "syncInstalledBanners": false,
+  "bannerIconsFile": "ModuleData/banner_icons.xml",
+  "nativeBannerIconsFile": "Modules/Native/ModuleData/banner_icons.xml",
+  "bannerDefinitionPaths": [
+    "ModuleData"
+  ],
+  "atlasSourceDirectory": "AssetSources/BannerIcons",
+  "thumbnailDirectory": "",
+  "nativeAssetDirectory": "Modules/Native/AssetPackages",
+  "assetPackagePaths": [
+    "Assets",
+    "AssetPackages"
+  ],
+  "atlasPrefix": "",
+  "dataDirectory": "."
+}

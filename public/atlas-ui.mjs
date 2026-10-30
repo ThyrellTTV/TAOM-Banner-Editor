@@ -42,11 +42,11 @@ export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
   }
   $('atlasButton').onclick=async()=>{
     $('atlasDialog').showModal();
-    $('atlasDestination').textContent=getLibrary().config.modulePath+' · AssetSources\\BannerIcons + ModuleData\\banner_icons.xml + GUI\\SpriteParts\\ui_taom_bannericons';
+    const cfg=getLibrary().config; $('atlasDestination').textContent=cfg.moduleName+' · '+cfg.atlasSourceDirectory+' + '+cfg.bannerIconsFile+' + '+cfg.thumbnailDirectory;
     try{
       const info=await api('/api/atlas-info');$('atlasFactions').replaceChildren();
       for(const faction of info.factions){const option=document.createElement('option');option.value=faction;$('atlasFactions').append(option);}
-      if(!$('atlasFaction').value)$('atlasFaction').value='gondor';
+      if(!$('atlasFaction').value)$('atlasFaction').value=info.factions[0]||'custom';
     }catch(e){error(e.message);}
   };
   $('closeAtlasButton').onclick=()=>{if(!busy)$('atlasDialog').close();};

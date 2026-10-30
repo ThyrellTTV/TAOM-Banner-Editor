@@ -13,3 +13,9 @@ app/
 app-logo-staging/
 exports/
 atlas-builds/
+config.json
+config.json.*.tmp
+dist/
+tools/
+runtime/
+.jobs/
