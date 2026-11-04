@@ -1,4 +1,5 @@
 import {BANNER_SIZE,EDITABLE_GUIDE_SIZE,bannerViewport,bannerToCanvas} from './banner-space.mjs';
+import {selectionBounds} from './layer-editing.mjs';
 export class BannerRenderer {
   constructor(library) {
     this.library=library;
@@ -66,7 +67,7 @@ export class BannerRenderer {
     if(this.tints.size>=128) this.tints.delete(this.tints.keys().next().value);
     this.tints.set(key,canvas);return canvas;
   }
-  async render(canvas,layers,{span=BANNER_SIZE,selected=-1,guides=false,shape='square'}={}) {
+  async render(canvas,layers,{span=BANNER_SIZE,selected=-1,selection=[],snapLines={},grid=0,guides=false,shape='square'}={}) {
     const revision=canvas._revision=(canvas._revision||0)+1;
     const images=await Promise.all(layers.map((l,i)=>this.tinted(l,i===0).catch(()=>null)));
     if(canvas._revision!==revision) return;
@@ -80,6 +81,10 @@ export class BannerRenderer {
       ctx.save();ctx.translate(l.x,l.y);ctx.rotate(-l.rotation*Math.PI/180);ctx.scale(l.mirror?-1:1,1);
       ctx.drawImage(images[i],-l.width/2,-l.height/2,l.width,l.height);ctx.restore();
     });ctx.restore();
+    if(grid>0){
+      const step=grid*Math.max(1,Math.ceil(6/(grid*s)));ctx.save();ctx.strokeStyle='#ffffff10';ctx.lineWidth=1;
+      for(let value=Math.ceil(viewportStart(span)/step)*step;value<=viewportStart(span)+span;value+=step){const p=bannerToCanvas(value,value,w,h,span);ctx.beginPath();ctx.moveTo(p.x,0);ctx.lineTo(p.x,h);ctx.moveTo(0,p.y);ctx.lineTo(w,p.y);ctx.stroke();}ctx.restore();
+    }
     if(guides) {
       ctx.save();ctx.strokeStyle='#ffffff22';ctx.lineWidth=1;ctx.setLineDash([5,6]);
       ctx.beginPath();ctx.moveTo(w/2,0);ctx.lineTo(w/2,h);ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();ctx.restore();
@@ -88,13 +93,18 @@ export class BannerRenderer {
       if(w>=400&&span>EDITABLE_GUIDE_SIZE){ctx.fillStyle='#deb676';ctx.font='12px Segoe UI, sans-serif';ctx.fillText('512 guide',(w-guide)/2+7,(h-guide)/2+17);}
       ctx.restore();
     }
-    if(selected>=0&&layers[selected]) {
-      const l=layers[selected],position=bannerToCanvas(l.x,l.y,w,h,span);ctx.save();ctx.translate(position.x,position.y);ctx.rotate(-l.rotation*Math.PI/180);
+    const picks=selection.length?selection:selected>=0?[selected]:[];
+    for(const index of picks)if(layers[index]) {
+      const l=layers[index],position=bannerToCanvas(l.x,l.y,w,h,span);ctx.save();ctx.translate(position.x,position.y);ctx.rotate(-l.rotation*Math.PI/180);
       ctx.strokeStyle='#deb676';ctx.lineWidth=1.5;ctx.setLineDash([6,4]);ctx.strokeRect(-l.width*s/2,-l.height*s/2,l.width*s,l.height*s);
       ctx.setLineDash([]);ctx.fillStyle='#f3d49e';
       for(const x of [-1,1])for(const y of [-1,1])ctx.fillRect(x*l.width*s/2-3,y*l.height*s/2-3,6,6);
       ctx.restore();
     }
+    if(picks.length>1){const box=selectionBounds(layers,picks),point=bannerToCanvas(box.left,box.top,w,h,span);ctx.save();ctx.strokeStyle='#8dc9db';ctx.setLineDash([3,4]);ctx.strokeRect(point.x,point.y,box.width*s,box.height*s);ctx.restore();}
+    ctx.save();ctx.strokeStyle='#74dded';ctx.lineWidth=1.5;ctx.setLineDash([7,3]);
+    if(Number.isFinite(snapLines.x)){const p=bannerToCanvas(snapLines.x,764,w,h,span);ctx.beginPath();ctx.moveTo(p.x,0);ctx.lineTo(p.x,h);ctx.stroke();}
+    if(Number.isFinite(snapLines.y)){const p=bannerToCanvas(764,snapLines.y,w,h,span);ctx.beginPath();ctx.moveTo(0,p.y);ctx.lineTo(w,p.y);ctx.stroke();}ctx.restore();
   }
   hit(l,x,y) {
     const angle=l.rotation*Math.PI/180,dx=x-l.x,dy=y-l.y;
@@ -103,3 +113,4 @@ export class BannerRenderer {
     return Math.abs(tx)<=Math.abs(l.width)/2&&Math.abs(ty)<=Math.abs(l.height)/2;
   }
 }
+function viewportStart(span){return (BANNER_SIZE-span)/2;}

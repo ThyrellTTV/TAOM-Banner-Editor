@@ -19,5 +19,27 @@
     "AssetPackages"
   ],
   "atlasPrefix": "",
-  "dataDirectory": "."
+  "dataDirectory": ".",
+  "resourceSettings": {
+    "newAtlasSize": 2048,
+    "atlasSize": 0,
+    "atlasFormat": "rgba8",
+    "guiFormat": "rgba8",
+    "mipmaps": false,
+    "quality": "balanced",
+    "textureFlags": null,
+    "material": {
+      "template": "",
+      "override": false,
+      "blendMode": "modulate",
+      "alphaTest": 0.4980392156862745,
+      "flags": [
+        "two_sided"
+      ],
+      "shaderFlags": [
+        "alpha_test"
+      ],
+      "vertexFlags": []
+    }
+  }
 }

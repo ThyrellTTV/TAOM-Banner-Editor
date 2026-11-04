@@ -10,8 +10,8 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
 # Copy only application sources. Local settings, game assets and working data
 # never enter the package, even when they live beside the source checkout.
-$files = @('server.mjs','configuration.mjs','library.mjs','source-store.mjs','prepare-assets.mjs',
-  'atlas-builder.mjs','atlas-registration.mjs','build-atlas.mjs','regenerate-atlases.mjs',
+$files = @('server.mjs','configuration.mjs','profiles.mjs','atlas-manager.mjs','asset-validation.mjs','library.mjs','source-store.mjs','prepare-assets.mjs',
+  'atlas-builder.mjs','atlas-registration.mjs','build-atlas.mjs','regenerate-atlases.mjs','resource-compiler.mjs','texture-encoding.mjs','game-deployment.mjs','compile-game-resources.mjs',
   'package.json','package-lock.json','config.example.json','README.md','Start-Banner-Editor.cmd','Start-in-browser.ps1')
 foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $studioRoot $file) -Destination $stage }
 Copy-Item -LiteralPath (Join-Path $studioRoot 'public') -Destination $stage -Recurse
@@ -22,9 +22,13 @@ dotnet publish (Join-Path $studioRoot 'desktop-shell/BannerStudio.csproj') -c Re
 if ($LASTEXITCODE -ne 0) { throw 'Desktop app publication failed.' }
 dotnet publish (Join-Path $studioRoot 'extractor/Extractor.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o (Join-Path $stage 'tools/extractor') --nologo -v quiet
 if ($LASTEXITCODE -ne 0) { throw 'Extractor publication failed.' }
+dotnet build (Join-Path $studioRoot 'sprite-packer/SpritePacker.csproj') -c Release -o (Join-Path $stage 'tools/sprite-packer') --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw 'Sprite packer build failed.' }
+dotnet publish (Join-Path $studioRoot 'texture-encoder/TextureEncoder.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=None -o (Join-Path $stage 'tools/texture-encoder') --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw 'Texture encoder publication failed.' }
 $nugetRoot = ((& dotnet nuget locals global-packages --list --force-english-output) -replace '^[^:]+:\s*','').Trim()
 $packages = @{}
-foreach ($project in @('desktop-shell','extractor')) {
+foreach ($project in @('desktop-shell','extractor','texture-encoder')) {
     $assets = Get-Content -LiteralPath (Join-Path $studioRoot "$project/obj/project.assets.json") -Raw | ConvertFrom-Json
     foreach ($library in $assets.libraries.psobject.Properties) {
         if ($library.Value.type -eq 'package') { $packages[$library.Name.ToLowerInvariant()] = $true }

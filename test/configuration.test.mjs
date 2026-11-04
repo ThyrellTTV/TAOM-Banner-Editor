@@ -7,7 +7,7 @@ import net from 'node:net';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import sharp from 'sharp';
-import {normalizeConfig,configPaths,readConfig,validateConfig,workspaceSignature,workspaceIdentity} from '../configuration.mjs';
+import {normalizeConfig,configPaths,readConfig,validateConfig,workspaceSignature,workspaceIdentity,assetFingerprint} from '../configuration.mjs';
 import {buildAtlases} from '../atlas-builder.mjs';
 import {loadLibrary} from '../library.mjs';
 
@@ -24,7 +24,7 @@ export async function makeModuleFixture(temp,port=4318){
   await fs.writeFile(p.nativeRegistry,'<base><BannerIconData><BannerIconGroup id="1"><Background id="11" mesh_name="pattern" /></BannerIconGroup><BannerColors><Color id="0" hex="0xff101010"/><Color id="1" hex="0xffddbb55"/></BannerColors></BannerIconData></base>');
   await fs.writeFile(p.definitions[0],'<Factions><Faction id="west" name="Western Clan" banner_key="'+sampleCode+'" /></Factions>');
   await fs.writeFile(path.join(p.data,'cache','assets.json'),JSON.stringify({modulePath:config.modulePath,gamePath:config.gamePath,materials:{},textures:{},meshes:{},errors:[]}));
-  await fs.writeFile(path.join(p.data,'cache','workspace.json'),JSON.stringify({signature:workspaceSignature(config)}));
+  await fs.writeFile(path.join(p.data,'cache','workspace.json'),JSON.stringify({signature:workspaceSignature(config),assetFingerprint:await assetFingerprint(config,root)}));
   return {config,p};
 }
 async function temporary(run){

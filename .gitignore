@@ -13,9 +13,17 @@ app/
 app-logo-staging/
 exports/
 atlas-builds/
+game-builds/
+sprite-packer/bin/
+sprite-packer/obj/
+texture-encoder/bin/
+texture-encoder/obj/
 config.json
 config.json.*.tmp
 dist/
 tools/
 runtime/
 .jobs/
+*.profiles.json
+*.profiles.json.*.tmp
+.profiles/

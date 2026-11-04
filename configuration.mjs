@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {XMLValidator} from 'fast-xml-parser';
+import {normalizeResourceSettings} from './public/resource-settings.mjs';
 
 export const DEFAULT_PORT=4318;
 const text=value=>typeof value==='string'?value.trim():'';
@@ -27,7 +28,7 @@ export function normalizeConfig(input={},root=process.cwd()){
     thumbnailDirectory:text(input.thumbnailDirectory)||`GUI/SpriteParts/ui_${moduleSlug}_bannericons`,
     nativeAssetDirectory:text(input.nativeAssetDirectory)||'Modules/Native/AssetPackages',
     assetPackagePaths:input.assetPackagePaths===undefined?['Assets','AssetPackages']:lines(input.assetPackagePaths),
-    atlasPrefix:prefix,dataDirectory:text(input.dataDirectory)||'.'};
+    atlasPrefix:prefix,dataDirectory:text(input.dataDirectory)||'.',resourceSettings:normalizeResourceSettings(input.resourceSettings)};
 }
 export function insideModule(modulePath,relative){
   if(!modulePath)throw new Error('Choose a module folder.');
@@ -48,12 +49,19 @@ export function configPaths(config,root){
     moduleAssets:config.assetPackagePaths.map(folder=>path.resolve(config.modulePath,folder))};
 }
 export function workspaceSignature(config){
-  const {installedModulePath,syncInstalledBanners,port,...workspace}=config;
+  const {installedModulePath,syncInstalledBanners,port,resourceSettings,...workspace}=config;
   return createHash('sha256').update(JSON.stringify(workspace)).digest('hex');
 }
 export function workspaceIdentity(config){
   const {port,...settings}=config;
   return createHash('sha256').update(JSON.stringify(settings)).digest('hex');
+}
+export async function assetFingerprint(config,root){
+  const p=configPaths(config,root),hash=createHash('sha256'),packages=new Set();
+  for(const file of [p.registry,p.nativeRegistry])hash.update(await fs.readFile(file));
+  async function collect(location,recursive){const stat=await fs.stat(location).catch(error=>{if(error.code==='ENOENT')return null;throw error;});if(!stat)return;if(stat.isFile()){if(/\.tpac$/i.test(location))packages.add(location);return;}for(const entry of await fs.readdir(location,{withFileTypes:true})){const file=path.join(location,entry.name);if(entry.isDirectory()&&recursive)await collect(file,true);else if(entry.isFile()&&/\.tpac$/i.test(entry.name))packages.add(file);}}
+  await collect(p.nativeAssets,false);for(const location of p.moduleAssets)await collect(location,true);
+  for(const file of [...packages].sort()){const stat=await fs.stat(file);hash.update(JSON.stringify([file,stat.size,stat.mtimeMs]));}return hash.digest('hex');
 }
 export async function readConfig(root,file=path.join(root,'config.json')){
   let raw={};let error=null;

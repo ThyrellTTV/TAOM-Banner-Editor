@@ -42,7 +42,7 @@ export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
   }
   $('atlasButton').onclick=async()=>{
     $('atlasDialog').showModal();
-    const cfg=getLibrary().config; $('atlasDestination').textContent=cfg.moduleName+' · '+cfg.atlasSourceDirectory+' + '+cfg.bannerIconsFile+' + '+cfg.thumbnailDirectory;
+    const cfg=getLibrary().config,size=cfg.resourceSettings?.newAtlasSize||2048;$('atlasIntro').textContent=size+'×'+size+' PSD · sixteen '+size/4+'×'+size/4+' cells · oversized artwork scales down · smaller artwork keeps its original size.'; $('atlasDestination').textContent=cfg.moduleName+' · '+cfg.atlasSourceDirectory+' + '+cfg.bannerIconsFile+' + '+cfg.thumbnailDirectory;
     try{
       const info=await api('/api/atlas-info');$('atlasFactions').replaceChildren();
       for(const faction of info.factions){const option=document.createElement('option');option.value=faction;$('atlasFactions').append(option);}

@@ -23,6 +23,8 @@ From source, install Node.js 22+, the .NET 10 SDK and WebView2, then:
 ```powershell
 npm ci
 dotnet publish desktop-shell/BannerStudio.csproj -c Release -o app -p:PublishSingleFile=true --self-contained false -r win-x64
+dotnet build sprite-packer/SpritePacker.csproj -o tools/sprite-packer
+dotnet build texture-encoder/TextureEncoder.csproj -o tools/texture-encoder
 .\Start-Banner-Editor.cmd
 ```
 
@@ -54,12 +56,79 @@ Local settings are stored in `config.json` and excluded from Git/packages. `conf
 
 The editor supports standard Bannerlord `BannerIconData` registries, dot-separated banner codes, XML banner attributes and supported literal/XSLT attribute overrides. It finds materials and their texture dependencies from the registry, without requiring TAOM material names. **Symbol atlases must use the standard 4×4 layout.** It is not a general XSLT execution engine, custom shader renderer or save-game editor. Modules with proprietary banner formats or different atlas layouts need additional support. Both module and Native registries are currently required; use a valid empty module registry for a mod that only uses Native symbols.
 
+## Mod profiles
+
+Your existing configuration becomes the first profile automatically, with its current data folder, drafts and backups retained. Switch profiles using the **Mod profile** selector in the library. In **Module settings**, choose **New profile**, give it a name, configure its folders, and use **Create & load profile**. Leaving Editor data folder blank on a new profile creates a separate `.profiles/<ID>/` data folder. The editor refuses sharing the same data folder between profiles.
+
+Profiles retain their own paths, installed-module mirror setting, caches, drafts, exports, atlas builds and backups. Unsaved banner edits are checked before switching. Profile names can be edited in Module settings. Removing an inactive profile removes its saved catalog entry; its module and data files remain on disk. The active settings stay in `config.json`; the local catalog is `config.profiles.json`. Both and `.profiles/` are excluded from Git and release ZIPs.
+
+## Atlas manager
+
+Click **Atlas manager** to browse registered materials and their sixteen slots. Select a slot to see its icon IDs and the banners that reference them. You can **replace artwork with a PNG**, **centre a slot**, **centre every registered slot**, or **swap artwork between filled slots**. Existing icon IDs and texture indexes are preserved.
+
+To fill an **Unused · add PNG** cell, select it, choose its icon category and upload a PNG. **Build review** proposes a free icon ID and a new `banner_icons.xml` entry at that exact slot. Native IDs, module IDs and existing numeric thumbnail filenames are reserved. The review shows the proposed ID and provides the proposed XML for download; no module files change until installation.
+
+Operations are queued until **Build review**. The review package is created under the active profile's `atlas-builds/manage-<batch>/` folder, outside the source atlas folder. Compare **Registered slots** with **Reviewed result** before choosing **Install reviewed atlas**. Download the reviewed layered PSD independently if desired.
+
+The manager supports 8-bit RGB PSD and PNG atlases up to 4096×4096, with square 4×4 layouts and even-sized cells. It preserves the existing source format and resolution; the new-atlas importer uses the profile's 1K/2K/4K PSD setting. PSD source layers are retained and updated cells are added as editable cover layers. PNG sources get an editable PSD in the review package while installation updates the original PNG, avoiding duplicate engine source assets. Unchanged cells remain pixel-for-pixel identical. Centring uses the artwork currently inside the cell; use the original PNG to replace artwork that was previously clipped across cell boundaries.
+
+Installation verifies the reviewed source/XML/thumbnail snapshots, backs up exact originals in the package's `originals/` folder, and updates the reviewed source plus affected transparent GUI thumbnails. When filling unused cells, it rechecks ID availability and commits the XML registration last. Existing-slot edits leave the XML unchanged. A stale target blocks installation; a failed replacement restores files already written and removes newly created thumbnails. Use **Build game resources** afterwards to compile and deploy the artwork.
+
+## Automatic game resource deployment
+
+In **Atlas manager**, select an atlas and finish installing any queued source edits. Click **Build game resources**. The editor automatically packs all banner thumbnails using the installed TaleWorlds sprite generator library, builds the selected atlas texture and banner material, and generates editable `.tpac` packages and matching `.rdc` runtime texture data. No manual Modding Kit import is needed for the supported format.
+
+The **Game deployment** review shows the exact changed files, sizes and destination folders. **Deploy reviewed resources** updates the development module and the configured installed module, if one is set. This is independent of the clan/kingdom banner-code mirror toggle. Source/target module IDs must match. Existing material/texture GUIDs are retained; new resources receive new IDs. The complete banner thumbnail category is repacked together, while unrelated SpriteData categories are preserved separately for each destination.
+
+Builds live under the active profile's `game-builds/deploy-<batch>/`. Building changes no module files. Deployment verifies input and destination snapshots, saves exact originals under the build's `originals/` folder, writes resource data before XML mappings, and restores written files on failure. The game and Modding Kit must be closed when deploying. Restart Bannerlord afterwards to load the changed resources. The selected atlas and shared banner thumbnail resources are included; other atlases, UI categories, module binaries and campaign files are not rebuilt.
+
+**Supported compiler:** the editable single-resource TPAC v2 / texture metadata v3 / material metadata v0 format verified in **Bannerlord 1.5.6**. The active module must supply compatible existing banner material/texture and GUI sheet templates, a `GUI/<module ID>SpriteData.xml`, and its thumbnail category in `GUI/SpriteParts/Config.xml`. Module folder names must match their SubModule IDs, and source artwork/thumbnail folders must be inside the source module. Installed TaleWorlds editor sprite-generator binaries and .NET Framework 4.8 are required for packing; vendor binaries are resolved from the user's installation and are not redistributed.
+
+The default remains **uncompressed RGBA8 with one mip**, preserving the working output. Compression, resolution and material options are now configurable as described below. Native loader/render tests cover newly generated resources and dimension changes; this is a focused banner compiler, not a general asset importer.
+
+Command-line equivalent (build a review first):
+
+```powershell
+node .\compile-game-resources.mjs --material taom_banners_packed_alpha_02
+node .\compile-game-resources.mjs --install-build deploy-<batch>
+```
+
+Use `--config <file>` for a different profile/configuration. Download the deployment manifest from the review to inspect all file hashes and backups.
+
+## Texture, material and resolution settings
+
+Open **Module settings → Atlas resolution, textures and materials** and click **Apply & load module** to save. These settings persist in `config.json` and each mod profile, and are used by both the app and CLI. Changing compilation options invalidates older deployment reviews; it does not rewrite module assets until a new build is deployed.
+
+| Option | Behavior |
+| --- | --- |
+| New PSD resolution | 1K, 2K or 4K, giving sixteen 256, 512 or 1024px cells; default 2K |
+| Compiled atlas resolution | Keep source resolution, or compile at 1K/2K/4K; each cell is resampled independently and the editable PSD/PNG remains at its original resolution |
+| Atlas texture format | RGBA8, BC1/DXT1, BC3/DXT5 or BC7 |
+| Thumbnail sheet format | RGBA8, BC3/DXT5 or BC7, preserving alpha; the packer determines sheet sizes and mappings |
+| Compression quality | Fast, Balanced or Best; higher quality takes longer |
+| Generate atlas mipmaps | Creates the full chain down to 1×1; off by default; GUI sheets stay unmipped |
+| Atlas texture flags | Preserve existing flags, or replace them with the given lowercase names |
+| Material template | Preserve the existing material, or use a compatible registered module material as the shader/settings template |
+| Custom material settings | Blend mode, alpha cutoff (0–1), material flags, shader flags and vertex layout flags |
+
+**Copy template values to custom settings** fills the custom material fields from the selected template. Empty custom flag lists clear those flags. Existing texture/material IDs and diffuse bindings remain stable. New resources receive new IDs. A selected material template supplies its shader and other material values while retaining the destination resource's identity.
+
+RGBA8 uses 4 bytes per pixel; BC1 uses approximately 0.5 and BC3/BC7 approximately 1 before mip overhead. BC compression is lossy. GUI formats retain transparency, while BC1 is offered for opaque banner masks. Building a larger compiled texture preserves placement but cannot recover detail absent from the source. The review and deployment manifest record the actual dimensions, format, mip count and saved settings used for the build.
+
+## Asset validation
+
+Click **Validate assets** for a read-only report covering XML validity, duplicate IDs/groups/colours, invalid slot indexes, unresolved banner symbols/colours, missing materials/textures/sources, empty or off-centre registered cells, transparent GUI thumbnails, and orphan/unregistered assets. Native ID overrides and source-based previews are identified separately. Existing 4096px sources are informational; they are not treated as invalid when the profile uses a smaller resolution for new imports.
+
+Filter by severity or search an ID/material. **Open atlas** jumps to the affected material/slot; **Open banner** opens an affected composition. **Export JSON report** saves the complete report. Validation never repairs or installs anything automatically. Asset-cache fingerprints track registry and TPAC changes, and source previews track PSD/PNG changes, so reloading does not silently reuse an obsolete material cache.
+
 ## Editing
 
 - Select a clan, kingdom or culture from the library. Search uses its name, ID or culture.
 - Click a symbol below the preview to replace the selected layer. Shift-click to add a new layer. Clicking a symbol with the background selected also adds a layer.
 - Add, duplicate, delete and reorder symbol layers in the right panel. The background always remains at the bottom.
-- Drag symbols in the preview, use the numeric transform fields, or scroll over the preview to resize the selected symbol.
+- **Ctrl-click** layers to toggle selection; **Shift-click** a layer selects a range. Shift/Ctrl-click symbols on the canvas to toggle them. **Ctrl+A** selects all symbols; Escape keeps the primary selection. The background stays outside a multi-selection.
+- Drag, nudge, duplicate, delete, reorder, scale, rotate, mirror, centre or recolour a selected group. Numeric X/Y and size fields show the primary layer and transform the group around it or its shared centre. **Align X / Align Y** align selected centres. Undo/redo restores the group and its selection.
+- **Smart snapping** aligns dragged selections to canvas/512 guides and other layer bounds/centres. Choose an optional 8/16/32/64-unit grid. Hold **Alt** while dragging to bypass snapping. Snap tolerance follows the displayed zoom; cyan guides show active targets.
 - **Ctrl+mouse wheel** zooms the preview around the pointer without changing any banner values. Hold **Space and drag**, or use the middle mouse button, to pan. The −/+ buttons also zoom; **Fit** or **Ctrl+0** resets the preview. Zoom ranges from 25% to 1600% and resets when switching banners or crop views. This navigation does not change layer sizes, positions, undo history, saves or PNG exports.
 - Set primary/outline colours from the merged Native + module palette. Backgrounds have two colours. Toggle an outline, mirror a layer or rotate it.
 - Arrow keys move one unit; Shift+arrow moves ten. Ctrl+Z undoes; Ctrl+Shift+Z or Ctrl+Y redoes; Ctrl+D duplicates; Delete removes a symbol.
@@ -80,15 +149,15 @@ Saving updates module definition files on disk. It does not patch a running game
 
 New compositions can be saved as drafts or exported as banner codes. To assign one to a clan or kingdom, select that source banner, import the new code, and use Save to module.
 
-The app does not automatically edit faction armour colours, kingdom colour overrides, clan-heraldry configuration, or saved campaigns. The atlas builder creates PSDs, registers new symbol IDs and generates GUI source thumbnails. Compiling materials/textures and packing GUI sprite sheets remain separate stages.
+The app does not automatically edit faction armour colours, kingdom colour overrides, clan-heraldry configuration, or saved campaigns. The atlas builder creates PSDs, registers new symbol IDs and generates GUI source thumbnails. **Build game resources** then compiles the selected atlas and packs/deploys the banner GUI resources through a separate review.
 
 ## Build a 4×4 PSD from PNGs
 
 Click **Build atlas**, choose a faction and **Alpha** or **Ornament**, then add PNG files. Use the arrows beside each file to change its slot order and click **Generate PSD atlas**.
 
-- Every new PSD is **2048×2048**, split into sixteen **512×512** cells.
+- New PSDs use the profile's **1K/2K/4K** setting, split into sixteen **256/512/1024px** cells. The default is 2048×2048 with 512px cells.
 - Transparent margins are trimmed. The visible artwork's bounding rectangle is centred on the exact cell centre, horizontally and vertically.
-- Oversized artwork is scaled down proportionally to fit; smaller artwork is never enlarged. Default padding is zero. Optional padding and an outside outline reserve room inside the same 512px cell.
+- Oversized artwork is scaled down proportionally to fit; smaller artwork is never enlarged. Default padding is zero. Optional padding and an outside outline reserve room inside the chosen cell size.
 - Odd pixel dimensions receive a half-pixel translation with antialiasing so their visible bounds can be centred exactly using integer PSD layer positions. This does not scale the image up.
 - Images fill slots 0–15 from left to right, top to bottom. Image seventeen starts a second PSD. A batch supports up to 128 PNGs (128 MB total, 32 MB per file).
 - Your configured prefix plus faction/category determine the name, for example `taom_banners_gondor_alpha_03.psd` or `taom_banners_rohan_ornaments_01.psd`. The next number is automatic; existing PSDs are never overwritten.
@@ -109,7 +178,7 @@ node .\build-atlas.mjs --faction gondor --type alpha --input 'C:\incoming-banner
 node .\build-atlas.mjs --faction rohan --type ornament --input 'C:\incoming-ornaments' --no-install
 ```
 
-Folder input uses natural filename order (`2.png` before `10.png`). Explicit PNG arguments retain their supplied order. Run `npm run atlas -- --help` for padding, outline, mask mode, output directory and atlas-number options. The existing 4096px source PSDs are preserved; newly generated ones use the requested 2048px canvas.
+Folder input uses natural filename order (`2.png` before `10.png`). Explicit PNG arguments retain their supplied order. Run `npm run atlas -- --help` for padding, outline, mask mode, output directory and atlas-number options. Existing source PSDs are preserved; newly generated ones use the profile's configured canvas size.
 
 ## Artwork and cache
 
@@ -122,11 +191,11 @@ node .\regenerate-atlases.mjs --install-build 'C:\BannerStudio\atlas-builds\rege
 
 The first command stages every registered PSD and checks each saved composite for exact centring, valid mask channels and empty unregistered slots. Review `all-atlases.png` and individual preview grids. The second command verifies that the XML and original PSDs have not changed, saves byte-for-byte backups under the batch's `originals/` directory, then replaces the module PSDs. `regeneration.json` records source paths, hashes, scaling, placement, backup location and installation status. `--install` can build and install in one command. Unregistered PSDs and the source XML are preserved. Game texture compilation remains separate.
 
-Native symbols, materials and background geometry come from the installed game's Native TPAC packages. Native BC7 textures are decoded locally. TAOM's development texture TPAC files contain metadata but no pixels, so the editor reads the merged images in `AssetSources/BannerIcons/*.psd`. Red is the outline mask; green is the fill mask, matching the game shader.
+Native symbols, materials and background geometry come from the installed game's Native TPAC packages. Native BC7 textures are decoded locally. Module artwork can preview directly from registered PSD or PNG atlases, including packed PNG sources. Local source artwork takes precedence over an older compiled preview when present. Red is the outline mask; green is the fill mask, matching the game shader.
 
 Startup and Reload refresh source XML/XSLT and changed PSD composites. After changing asset registrations/material packages, use Module settings → Rebuild asset cache. Generated data lives under `cache/`. Extraction details are in `logs/extraction.log` after a rebuild.
 
-Some existing source banners reference undefined symbol IDs (`17299`, `17358`, `17104`, `17371`, `17281`) or palette IDs (`124`, `128`, `132`, `144`, `145`). The editor displays warnings for affected banners and preserves those values. No source data was changed to resolve them.
+Some module definitions can reference symbols or palette colours missing from their configured registries. Validation lists the affected banners, while the editor preserves their original values. No source data is silently substituted.
 
 ## Development
 

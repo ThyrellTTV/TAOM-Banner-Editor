@@ -17,6 +17,39 @@ export async function readIconRegistry(modulePath,registryFile='ModuleData/banne
   return {xmlPath,original,xml,groups,materials:groups.flatMap(g=>list(g.Icon).map(i=>i.material_name))};
 }
 
+// Add symbols to unused cells of an existing material without renumbering any
+// existing entry. Explicit IDs are used when verifying an already-built review.
+export async function planSlotRegistration({modulePath,gamePath,material,additions,registryFile,nativeRegistryFile='Modules/Native/ModuleData/banner_icons.xml',thumbnailDirectory}){
+  if(!/^[-a-z0-9_]{1,160}$/i.test(material)||!Array.isArray(additions)||!additions.length||additions.length>16)throw new Error('Invalid new atlas slots.');
+  const registry=await readIconRegistry(modulePath,registryFile),used=new Set(),occupied=new Set();
+  const reserve=groups=>{for(const group of groups)for(const item of [...list(group.Icon),...list(group.Background)]){const id=Number(item.id);if(Number.isSafeInteger(id)&&id>=0)used.add(id);}};
+  reserve(registry.groups);
+  for(const group of registry.groups)for(const icon of list(group.Icon))if(icon.material_name===material)occupied.add(Number(icon.texture_index));
+  if(gamePath){const xml=await fs.readFile(path.resolve(gamePath,nativeRegistryFile),'utf8');if(XMLValidator.validate(xml)!==true)throw new Error('Native banner registry is invalid.');reserve(list(parser.parse(xml).base?.BannerIconData?.BannerIconGroup));}
+  for(const file of await fs.readdir(path.resolve(modulePath,thumbnailDirectory||'GUI/SpriteParts/ui_taom_bannericons')).catch(error=>{if(error.code==='ENOENT')return [];throw error;}))if(/^\d+\.png$/i.test(file)){const id=Number(file.slice(0,-4));if(Number.isSafeInteger(id)&&id>=0&&id<=2_147_483_647)used.add(id);}
+  const validGroups=new Set(registry.groups.filter(g=>g.is_pattern!=='true'&&list(g.Icon).length).map(g=>Number(g.id))),planned=[];
+  let next=Math.max(9999,...used)+1;
+  for(const addition of additions){
+    const slot=addition.slot,groupId=addition.groupId;
+    if(!Number.isInteger(slot)||slot<0||slot>15||occupied.has(slot))throw new Error('Atlas slot '+slot+' is already registered or invalid.');
+    if(!Number.isSafeInteger(groupId)||!validGroups.has(groupId))throw new Error('Choose an existing symbol category for the new icon.');
+    const id=addition.id??next;
+    if(!Number.isSafeInteger(id)||id<0||id>2_147_483_647||used.has(id))throw new Error('New icon ID '+id+' is unavailable. Rebuild the review.');
+    used.add(id);occupied.add(slot);next=Math.max(next,id+1);planned.push({id,slot,groupId});
+  }
+  const newline=registry.xml.includes('\r\n')?'\r\n':'\n',remaining=new Set(planned.map(a=>a.groupId)),seen=new Set();
+  const changed=registry.xml.replace(/<BannerIconGroup\b(?![^>]*\/>)[^>]*>[\s\S]*?<\/BannerIconGroup\s*>/g,block=>{
+    const opening=block.slice(0,block.indexOf('>')+1),id=Number(opening.match(/\bid\s*=\s*(["'])(.*?)\1/)?.[2]);
+    if(!remaining.has(id))return block;if(seen.has(id))throw new Error('Duplicate target group ID '+id+'.');seen.add(id);
+    const close=block.match(/([\t ]*)(<\/BannerIconGroup\s*>)$/);if(!close)throw new Error('Cannot find symbol category closing tag.');
+    const prefix=block.slice(0,close.index),indent=block.match(/(?:^|\n)([\t ]*)<Icon\b/)?.[1]??close[1]+'  ';
+    const snippet=planned.filter(a=>a.groupId===id).map(a=>`${indent}<Icon id="${a.id}" material_name="${escape(material)}" texture_index="${a.slot}" />`).join(newline);
+    return prefix+(prefix.endsWith('\n')?'':newline)+snippet+newline+close[1]+close[2];
+  });
+  if(seen.size!==remaining.size||XMLValidator.validate(changed)!==true)throw new Error('Could not register the new atlas slots safely.');
+  return {...registry,changed:Buffer.from(changed),additions:planned};
+}
+
 export async function planAtlasRegistration({modulePath,gamePath,atlases,registry,registryFile,nativeRegistryFile='Modules/Native/ModuleData/banner_icons.xml',thumbnailDirectory:thumbnailFolder,atlasPrefix='taom_banners',groupLabel='TAOM'}){
   registry??=await readIconRegistry(modulePath,registryFile);
   const {xmlPath,original,xml,groups}=registry;

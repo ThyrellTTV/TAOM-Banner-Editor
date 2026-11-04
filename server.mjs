@@ -10,15 +10,22 @@ import { prepareSourceTextures } from './prepare-assets.mjs';
 import { decode } from './public/banner-code.mjs';
 import sharp from 'sharp';
 import { buildAtlases } from './atlas-builder.mjs';
-import {readConfig,normalizeConfig,configPaths,workspaceSignature,workspaceIdentity,validateConfig,writeConfig,DEFAULT_PORT} from './configuration.mjs';
+import {readConfig,configPaths,workspaceSignature,workspaceIdentity,assetFingerprint,validateConfig,DEFAULT_PORT} from './configuration.mjs';
+import {readProfiles,profileSummary,planProfileSettings,planProfileSwitch,persistProfiles,persistProfileCatalog} from './profiles.mjs';
+import {atlasCatalog,atlasDetails,stageAtlasEdit,installAtlasEdit,managedDirectory,maskThumbnail} from './atlas-manager.mjs';
+import {validateAssets} from './asset-validation.mjs';
+import {buildGameDeployment,installGameDeployment,deploymentDirectory,resourceSettingOptions} from './game-deployment.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const configFile=path.resolve(process.env.BANNER_STUDIO_CONFIG||path.join(root,'config.json'));
 let {config,error:setupError}=await readConfig(root,configFile);
 const port=Number(process.env.BANNER_STUDIO_PORT||process.env.TAOM_EDITOR_PORT||config.port||DEFAULT_PORT);
 if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Invalid editor port.');
 config.port=port;
+let profilesError=null;
+let profileStore=await readProfiles(configFile,config,root).catch(error=>{profilesError=error.message;return {version:1,activeId:null,profiles:[]};});
 let library,assets,refreshPromise;
 const maskCache=new Map();
+const managerThumbnailCache=new Map();
 let writeQueue=Promise.resolve();
 const enqueue=task=>{const job=writeQueue.then(task);writeQueue=job.catch(()=>{});return job;};
 const token=randomUUID();
@@ -40,20 +47,20 @@ async function extractAssets(settings){
     });
   }finally{await fs.unlink(runtimeFile).catch(()=>{});}
 }
-async function refresh(extract=false,settings=config,save=false){
+async function refresh(extract=false,settings=config,save=false,nextProfiles=profileStore){
   if(refreshPromise){try{await refreshPromise;}catch(error){if(!save)throw error;}if(!save)return;}
   refreshPromise=(async()=>{
     await validateConfig(settings,root);await folders(settings);
     if(settings.syncInstalledBanners)await validateInstalledModule(settings.modulePath,settings.installedModulePath);
-    const cacheFile=path.join(dataRoot(settings),'cache','assets.json'),signature=workspaceSignature(settings);
+    const cacheFile=path.join(dataRoot(settings),'cache','assets.json'),signature=workspaceSignature(settings),fingerprint=await assetFingerprint(settings,root);
     let fresh=await fs.readFile(cacheFile,'utf8').then(JSON.parse).catch(()=>null);
     const stamp=await fs.readFile(path.join(dataRoot(settings),'cache','workspace.json'),'utf8').then(JSON.parse).catch(()=>null);
-    if(extract||!fresh||stamp?.signature!==signature){await extractAssets(settings);fresh=JSON.parse(await fs.readFile(cacheFile,'utf8'));await fs.writeFile(path.join(dataRoot(settings),'cache','workspace.json'),JSON.stringify({signature}));}
+    if(extract||!fresh||stamp?.signature!==signature||stamp?.assetFingerprint!==fingerprint){await extractAssets(settings);fresh=JSON.parse(await fs.readFile(cacheFile,'utf8'));await fs.writeFile(path.join(dataRoot(settings),'cache','workspace.json'),JSON.stringify({signature,assetFingerprint:fingerprint}));}
     if(path.resolve(fresh.modulePath)!==path.resolve(settings.modulePath)||path.resolve(fresh.gamePath)!==path.resolve(settings.gamePath))throw new Error('Extracted assets belong to another module.');
     const nextLibrary=await loadLibrary(settings.modulePath,settings.gamePath,settings);
     const nextAssets=await prepareSourceTextures(dataRoot(settings),fresh,settings.modulePath,nextLibrary.icons,settings);
-    if(save)await writeConfig(configFile,settings);
-    config=settings;library=nextLibrary;assets=nextAssets;maskCache.clear();setupError=null;
+    if(save){if(profilesError)throw new Error(profilesError);await persistProfiles(configFile,nextProfiles,settings);profileStore=nextProfiles;}
+    config=settings;library=nextLibrary;assets=nextAssets;maskCache.clear();managerThumbnailCache.clear();setupError=null;
   })().finally(()=>{refreshPromise=null;});
   return refreshPromise;
 }
@@ -70,7 +77,20 @@ const server = http.createServer(async(req,res)=>{
     if(!['127.0.0.1:'+port,'localhost:'+port].includes(host)) return send(res,403,{error:'Invalid host.'});
     if(req.method==='POST') {
       if(req.headers['x-editor-token']!==token || !req.headers['content-type']?.startsWith('application/json')) return send(res,403,{error:'Open the editor to make changes.'});
-      const data=await body(req,url.pathname==='/api/atlas-build'?180_000_000:2_000_000);
+      const data=await body(req,['/api/atlas-build','/api/atlas-manager/stage'].includes(url.pathname)?180_000_000:2_000_000);
+      if(url.pathname==='/api/game-deployment/build')return send(res,200,await enqueue(()=>{assertWorkspace(data);if(!library)throw new Error('Load a module before compiling resources.');return buildGameDeployment({config,root,material:data.material,expected:data.expected});}));
+      if(url.pathname==='/api/game-deployment/install')return send(res,200,await enqueue(async()=>{assertWorkspace(data);const result=await installGameDeployment({config,root,batchId:data.batchId});try{await refresh();}catch(error){result.refreshWarning='Resources deployed, but the editor refresh failed: '+error.message;}return result;}));
+      if(url.pathname==='/api/validation')return send(res,200,await enqueue(async()=>{assertWorkspace(data);if(!library)throw new Error('Load a module before validating assets.');await refresh();return validateAssets({config,root,library,assets});}));
+      if(url.pathname==='/api/atlas-manager/stage')return send(res,200,await enqueue(()=>{assertWorkspace(data);if(!library)throw new Error('Load a module before editing an atlas.');return stageAtlasEdit({config,root,library,material:data.material,expected:data.expected,actions:data.actions});}));
+      if(url.pathname==='/api/atlas-manager/install'){
+        const result=await enqueue(async()=>{assertWorkspace(data);const result=await installAtlasEdit({config,root,batchId:data.batchId});try{await refresh();}catch(error){result.refreshWarning='Installed, but editor refresh failed: '+error.message;}return result;});return send(res,200,result);
+      }
+      if(url.pathname==='/api/profiles/switch'){
+        await enqueue(async()=>{assertWorkspace(data);if(profilesError)throw new Error(profilesError);const next=planProfileSwitch(profileStore,data.id,port);await refresh(false,next.config,true,next.store);});return send(res,200,{ok:true});
+      }
+      if(url.pathname==='/api/profiles/delete'){
+        await enqueue(async()=>{assertWorkspace(data);if(profilesError)throw new Error(profilesError);if(data.id===profileStore.activeId)throw new Error('Switch to another profile before removing the active profile.');const next=structuredClone(profileStore);if(!next.profiles.some(p=>p.id===data.id))throw new Error('Mod profile was not found.');next.profiles=next.profiles.filter(p=>p.id!==data.id);await persistProfileCatalog(configFile,next);profileStore=next;});return send(res,200,{ok:true});
+      }
       if(url.pathname==='/api/atlas-build'){
         if(!Array.isArray(data.files)||data.files.length<1||data.files.length>128)throw new Error('Choose between 1 and 128 PNGs.');
         const files=data.files.map(f=>{
@@ -82,7 +102,7 @@ const server = http.createServer(async(req,res)=>{
         const result=await enqueue(async()=>{
           assertWorkspace(data);
           const modulePath=config.modulePath,p=configPaths(config,root);
-          const result=await buildAtlases({files,faction:data.faction,category:data.category,modulePath,gamePath:config.gamePath,outputDirectory:path.join(dataRoot(),'atlas-builds'),sourceDirectory:p.atlasSources,registryFile:p.registry,nativeRegistryFile:p.nativeRegistry,thumbnailDirectory:p.thumbnails,atlasPrefix:config.atlasPrefix,groupLabel:config.moduleName,install:data.install!==false,padding:Number(data.padding??0),outline:Number(data.outline??0),mode:data.mode||'alpha',startIndex:data.startIndex==null?undefined:Number(data.startIndex)});
+          const result=await buildAtlases({files,faction:data.faction,category:data.category,modulePath,gamePath:config.gamePath,outputDirectory:path.join(dataRoot(),'atlas-builds'),sourceDirectory:p.atlasSources,registryFile:p.registry,nativeRegistryFile:p.nativeRegistry,thumbnailDirectory:p.thumbnails,atlasPrefix:config.atlasPrefix,groupLabel:config.moduleName,atlasSize:config.resourceSettings.newAtlasSize,install:data.install!==false,padding:Number(data.padding??0),outline:Number(data.outline??0),mode:data.mode||'alpha',startIndex:data.startIndex==null?undefined:Number(data.startIndex)});
           if(result.registration.installed){try{await refresh();}catch(error){result.refreshWarning='Import saved, but editor refresh failed: '+error.message;}}
           return result;
         });
@@ -116,8 +136,9 @@ const server = http.createServer(async(req,res)=>{
       if(url.pathname==='/api/config') {
         await enqueue(async()=>{
           assertWorkspace(data);
-          const next=normalizeConfig({...config,...data,port},root);
-          await refresh(false,next,true);
+          if(profilesError)throw new Error(profilesError);
+          const next=planProfileSettings(profileStore,{...data,port},config,root);
+          await refresh(false,next.config,true,next.store);
         });
         return send(res,200,{ok:true});
       }
@@ -125,12 +146,36 @@ const server = http.createServer(async(req,res)=>{
     }
     if(req.method!=='GET') return send(res,405,{error:'Method not supported.'});
     if(url.pathname==='/api/health')return send(res,200,{app:'taom-banner-editor',ready:true,configured:!!library,loading:!!refreshPromise});
+    if(url.pathname==='/api/profiles')return send(res,200,{...profileSummary(profileStore),error:profilesError});
+    if(url.pathname==='/api/resource-options')return send(res,200,library?await resourceSettingOptions({config,root}):{materials:[]});
+    if(url.pathname==='/api/game-deployment/report'){
+      const data=await fs.readFile(path.join(deploymentDirectory(config,root,url.searchParams.get('batchId')),'deployment.json'));
+      res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="deployment.json"','Cache-Control':'no-store'});return res.end(data);
+    }
+    if(url.pathname==='/api/atlas-manager'){if(!library)throw new Error('Load a module first.');return send(res,200,await atlasCatalog({config,root,library}));}
+    if(url.pathname==='/api/atlas-manager/details'){if(!library)throw new Error('Load a module first.');return send(res,200,await atlasDetails({config,root,library,material:url.searchParams.get('material')}));}
+    if(url.pathname==='/api/atlas-manager/thumbnail'){
+      const material=url.searchParams.get('material'),index=Number(url.searchParams.get('slot'));
+      if(!library?.icons.some(i=>i.source!=='Native'&&i.material===material&&i.index===index))throw new Error('Choose a registered module slot.');
+      const texture=assets.textures[assets.materials[material]?.slots?.['0']],image=texture?.images?.[0];if(!image||!/^\/cache\/textures\/[^/\\]+\.png$/i.test(image))throw new Error('Atlas artwork is unavailable.');
+      const key=material+':'+index,source=path.join(dataRoot(),image.slice(1));
+      if(!managerThumbnailCache.has(key)){
+        if(managerThumbnailCache.size>=256)managerThumbnailCache.delete(managerThumbnailCache.keys().next().value);
+        managerThumbnailCache.set(key,(async()=>{const meta=await sharp(source).metadata(),size=meta.width/4;if(meta.width!==meta.height||!Number.isInteger(size))throw new Error('Atlas is not a square 4×4 texture.');const pixels=await sharp(source).extract({left:index%4*size,top:Math.floor(index/4)*size,width:size,height:size}).resize(256,256).ensureAlpha().raw().toBuffer();return maskThumbnail(pixels,256);})().catch(error=>{managerThumbnailCache.delete(key);throw error;}));
+      }
+      const png=await managerThumbnailCache.get(key);res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-cache'});return res.end(png);
+    }
+    if(url.pathname.startsWith('/api/managed-atlas-file/')){
+      const parts=url.pathname.slice('/api/managed-atlas-file/'.length).split('/').map(decodeURIComponent);
+      if(parts.length!==2||parts[1]!=='banner_icons.xml'&&!/^[-a-z0-9_]+\.(?:psd|preview\.png)$/i.test(parts[1]))throw new Error('Invalid atlas review filename.');
+      const bytes=await fs.readFile(path.join(managedDirectory(config,root,parts[0]),parts[1]));res.writeHead(200,{'Content-Type':parts[1].endsWith('.psd')?'image/vnd.adobe.photoshop':parts[1].endsWith('.xml')?'application/xml; charset=utf-8':'image/png','Cache-Control':'no-cache'});return res.end(bytes);
+    }
     if(url.pathname==='/api/library')return send(res,200,{...(library||{banners:[],icons:[],backgrounds:[],colors:[],groups:[]}),assets:assets||{materials:{},textures:{},meshes:{},errors:[]},config,token,setupRequired:!library&&!refreshPromise,loading:!library&&!!refreshPromise,setupError,workspaceId:workspaceIdentity(config)});
     if(url.pathname==='/api/atlas-info'){
       const folder=configPaths(config,root).atlasSources;
       const names=await fs.readdir(folder).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
       const factions=[...new Set(names.filter(n=>n.startsWith(config.atlasPrefix+'_')).map(n=>n.slice(config.atlasPrefix.length+1).match(/^(.+)_(?:alpha|ornaments)_\d+\.psd$/i)?.[1]).filter(Boolean))].sort();
-      return send(res,200,{factions,folder,atlasSize:2048,cellSize:512});
+      return send(res,200,{factions,folder,atlasSize:config.resourceSettings.newAtlasSize,cellSize:config.resourceSettings.newAtlasSize/4});
     }
     if(url.pathname.startsWith('/api/atlas-file/')){
       const parts=url.pathname.slice('/api/atlas-file/'.length).split('/').map(decodeURIComponent);
@@ -174,4 +219,4 @@ const server = http.createServer(async(req,res)=>{
     res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'}); res.end(content);
   } catch(error) { send(res,error.code==='ENOENT'?404:400,{error:error.message}); }
 });
-server.listen(port,'127.0.0.1',()=>{console.log(`Banner Studio: http://127.0.0.1:${port}`);if(config.modulePath&&config.gamePath&&!setupError)refresh().catch(error=>{setupError=error.message;console.error(error.message);});});
+server.listen(port,'127.0.0.1',()=>{console.log(`Banner Studio: http://127.0.0.1:${port}`);if(config.modulePath&&config.gamePath&&!setupError)enqueue(async()=>{await refresh();if(!profilesError)await persistProfileCatalog(configFile,profileStore);}).catch(error=>{setupError=error.message;console.error(error.message);});});

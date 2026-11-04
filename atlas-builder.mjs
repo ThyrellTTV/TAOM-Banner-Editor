@@ -51,7 +51,7 @@ function crop(data,width,bounds) {
   for(let y=0;y<bounds.height;y++)data.copy(out,y*bounds.width*4,((bounds.top+y)*width+bounds.left)*4,((bounds.top+y)*width+bounds.left+bounds.width)*4);
   return out;
 }
-export async function preparePng(file,{padding=0,outline=0,mode='alpha'}={}) {
+export async function preparePng(file,{padding=0,outline=0,mode='alpha',cellSize=CELL_SIZE}={}) {
   const input=Buffer.isBuffer(file.data)?file.data:Buffer.from(file.data||[]);
   if(!input.length||input.length>32*1024*1024)throw new Error(file.name+': PNG must be between 1 byte and 32 MB.');
   const info=await sharp(input,{limitInputPixels:MAX_PIXELS}).metadata();
@@ -67,7 +67,8 @@ export async function preparePng(file,{padding=0,outline=0,mode='alpha'}={}) {
   }
   const bounds=alphaBounds(mask,width,height);
   if(!bounds)throw new Error(file.name+': the PNG has no visible artwork with this mask setting.');
-  const available=CELL_SIZE-2*padding-2*outline;
+  if(!Number.isInteger(cellSize)||cellSize<2||cellSize>2048||!Number.isInteger(padding)||padding<0||!Number.isInteger(outline)||outline<0||outline>24||!['alpha','light-on-dark','dark-on-light'].includes(mode))throw new Error('Invalid symbol placement options.');
+  const available=cellSize-2*padding-2*outline;if(available<2)throw new Error('Padding and outline leave no room for artwork.');
   const factor=Math.min(1,available/bounds.width,available/bounds.height);
   const targetWidth=Math.max(1,Math.floor(bounds.width*factor));
   const targetHeight=Math.max(1,Math.floor(bounds.height*factor));
@@ -105,13 +106,13 @@ async function availableStart(sourceDirectory,faction,category,requested,materia
   if(requested!==undefined&&(!Number.isInteger(requested)||requested<1||requested>9999))throw new Error('Atlas number must be a whole number from 1 to 9999.');
   return requested??Math.max(0,...used)+1;
 }
-function guides() {
-  return [512,1024,1536].flatMap(location=>[{location,direction:'horizontal'},{location,direction:'vertical'}]);
+function guides(cellSize=CELL_SIZE) {
+  return [cellSize,cellSize*2,cellSize*3].flatMap(location=>[{location,direction:'horizontal'},{location,direction:'vertical'}]);
 }
-async function transparentThumbnail(art){
+async function transparentThumbnail(art,cellSize=CELL_SIZE){
   const raw=Buffer.from(art.gameMask);
   for(let i=0;i<raw.length;i+=4){const alpha=Math.min(255,raw[i]+raw[i+1]);raw[i]=raw[i+1]=raw[i+2]=255;raw[i+3]=alpha;}
-  const width=Math.max(1,Math.floor(art.width/2)),height=Math.max(1,Math.floor(art.height/2));
+  const width=Math.max(1,Math.floor(art.width*256/cellSize)),height=Math.max(1,Math.floor(art.height*256/cellSize));
   const resized=await sharp(raw,{raw:{width:art.width,height:art.height,channels:4}}).resize(width,height).raw().toBuffer();
   const bounds=alphaBounds(resized,width,height);
   if(!bounds)throw new Error('Artwork disappeared in its GUI thumbnail.');
@@ -122,7 +123,9 @@ async function transparentThumbnail(art){
 }
 // Render an explicitly mapped page without changing XML texture indexes.
 // Used by both the new-atlas importer and registered-atlas regeneration.
-export async function writeAtlasPage({name,files,directory,padding=0,outline=0,mode='alpha',sourceOffset=0}) {
+export async function writeAtlasPage({name,files,directory,padding=0,outline=0,mode='alpha',sourceOffset=0,atlasSize=ATLAS_SIZE}) {
+  if(![1024,2048,4096].includes(atlasSize))throw new Error('Choose a 1K, 2K or 4K atlas resolution.');
+  const ATLAS_SIZE=atlasSize,CELL_SIZE=atlasSize/4;
   if(!/^[a-z][a-z0-9_]+$/.test(name))throw new Error('Invalid atlas material name.');
   if(!files.length||files.length>16)throw new Error('An atlas needs between 1 and 16 symbols.');
   const slots=files.map((file,index)=>file.textureIndex??index);
@@ -131,7 +134,7 @@ export async function writeAtlasPage({name,files,directory,padding=0,outline=0,m
   const composite=Buffer.alloc(ATLAS_SIZE*ATLAS_SIZE*4);for(let p=3;p<composite.length;p+=4)composite[p]=255;
   const background=Buffer.from(composite),maskLayers=[],sourceLayers=[],cells=[];
   for(let item=0;item<files.length;item++){
-    const original=files[item],slot=original.textureIndex??item,art=await preparePng(original,{padding,outline,mode});
+    const original=files[item],slot=original.textureIndex??item,art=await preparePng(original,{padding,outline,mode,cellSize:CELL_SIZE});
     const row=Math.floor(slot/4),column=slot%4,cx=column*CELL_SIZE+CELL_SIZE/2,cy=row*CELL_SIZE+CELL_SIZE/2;
     const left=cx-art.width/2,top=cy-art.height/2;
     if(!Number.isInteger(left)||!Number.isInteger(top))throw new Error('Internal error: symbol did not land on the exact cell centre.');
@@ -148,11 +151,11 @@ export async function writeAtlasPage({name,files,directory,padding=0,outline=0,m
     if(original.id!==undefined){
       if(!/^\d+$/.test(String(original.id)))throw new Error('Invalid thumbnail icon ID.');
       thumbnail='thumbnails/'+original.id+'.png';await fs.mkdir(path.join(directory,'thumbnails'),{recursive:true});
-      await fs.writeFile(path.join(directory,thumbnail),await transparentThumbnail(art),{flag:'wx'});
+      await fs.writeFile(path.join(directory,thumbnail),await transparentThumbnail(art,CELL_SIZE),{flag:'wx'});
     }
     cells.push({iconId:original.id,thumbnail,textureIndex:slot,row,column,source:art.name,originalFile:'sources/'+sourceName,originalSize:art.originalSize,trimmedBounds:art.trimmedBounds,scale:art.scale,placedBounds:{left,top,width:art.width,height:art.height},centre:{x:cx,y:cy},centreVerified:true,subpixelShift:art.subpixelShift,warnings:art.warnings});
   }
-  const psd={width:ATLAS_SIZE,height:ATLAS_SIZE,colorMode:3,bitsPerChannel:8,children:[{name:'Black background',left:0,top:0,transparencyProtected:true,imageData:imageData(background,ATLAS_SIZE,ATLAS_SIZE)},{name:'Original PNG colours (reference only)',hidden:true,opened:false,children:sourceLayers},{name:'Game masks · green fill / red outline',opened:true,children:maskLayers}],imageData:imageData(composite,ATLAS_SIZE,ATLAS_SIZE),imageResources:{gridAndGuidesInformation:{grid:{horizontal:CELL_SIZE,vertical:CELL_SIZE},guides:guides()}}};
+  const psd={width:ATLAS_SIZE,height:ATLAS_SIZE,colorMode:3,bitsPerChannel:8,children:[{name:'Black background',left:0,top:0,transparencyProtected:true,imageData:imageData(background,ATLAS_SIZE,ATLAS_SIZE)},{name:'Original PNG colours (reference only)',hidden:true,opened:false,children:sourceLayers},{name:'Game masks · green fill / red outline',opened:true,children:maskLayers}],imageData:imageData(composite,ATLAS_SIZE,ATLAS_SIZE),imageResources:{gridAndGuidesInformation:{grid:{horizontal:CELL_SIZE,vertical:CELL_SIZE},guides:guides(CELL_SIZE)}}};
   const psdFile=path.join(directory,name+'.psd');
   await fs.writeFile(psdFile,writePsdBuffer(psd,{generateThumbnail:false,compress:true}),{flag:'wx'});
   const verify=readPsd(await fs.readFile(psdFile),{useImageData:true,skipLayerImageData:true,skipThumbnail:true});
@@ -160,13 +163,15 @@ export async function writeAtlasPage({name,files,directory,padding=0,outline=0,m
   await sharp(composite,{raw:{width:ATLAS_SIZE,height:ATLAS_SIZE,channels:4}}).png().toFile(path.join(directory,name+'.mask.png'));
   const preview=Buffer.from(composite);
   for(let p=0;p<preview.length;p+=4){const v=Math.min(255,preview[p+1]+Math.round(preview[p]*.45));preview[p]=preview[p+1]=preview[p+2]=v;}
-  const overlay=Buffer.from(`<svg width="2048" height="2048" xmlns="http://www.w3.org/2000/svg">${Array.from({length:16},(_,i)=>{const x=i%4*512,y=Math.floor(i/4)*512;return `<rect x="${x+.5}" y="${y+.5}" width="511" height="511" fill="none" stroke="#aa8d59" stroke-width="2"/><path d="M${x+246} ${y+256}h20M${x+256} ${y+246}v20" stroke="#61c5ff" stroke-opacity=".65" stroke-width="2"/><text x="${x+14}" y="${y+32}" fill="#d1ae75" font-family="Arial" font-size="22">${i}</text>`;}).join('')}</svg>`);
+  const overlay=Buffer.from(`<svg width="${ATLAS_SIZE}" height="${ATLAS_SIZE}" xmlns="http://www.w3.org/2000/svg">${Array.from({length:16},(_,i)=>{const x=i%4*CELL_SIZE,y=Math.floor(i/4)*CELL_SIZE,s=CELL_SIZE/512;return `<rect x="${x+.5}" y="${y+.5}" width="${CELL_SIZE-1}" height="${CELL_SIZE-1}" fill="none" stroke="#aa8d59" stroke-width="${2*s}"/><path d="M${x+CELL_SIZE/2-10*s} ${y+CELL_SIZE/2}h${20*s}M${x+CELL_SIZE/2} ${y+CELL_SIZE/2-10*s}v${20*s}" stroke="#61c5ff" stroke-opacity=".65" stroke-width="${2*s}"/><text x="${x+14*s}" y="${y+32*s}" fill="#d1ae75" font-family="Arial" font-size="${22*s}">${i}</text>`;}).join('')}</svg>`);
   const guided=await sharp(preview,{raw:{width:ATLAS_SIZE,height:ATLAS_SIZE,channels:4}}).composite([{input:overlay}]).png().toBuffer();
   await sharp(guided).resize(1024,1024).png().toFile(path.join(directory,name+'.preview.png'));
-  return {name,psd:name+'.psd',mask:name+'.mask.png',preview:name+'.preview.png',cells,installedPath:null};
+  return {name,atlasSize,cellSize:CELL_SIZE,psd:name+'.psd',mask:name+'.mask.png',preview:name+'.preview.png',cells,installedPath:null};
 }
 
-export async function buildAtlases({files,faction,category,outputDirectory,sourceDirectory,modulePath,gamePath,install=true,padding=0,outline=0,mode='alpha',startIndex,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix='taom_banners',groupLabel='TAOM'}) {
+export async function buildAtlases({files,faction,category,outputDirectory,sourceDirectory,modulePath,gamePath,install=true,padding=0,outline=0,mode='alpha',startIndex,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix='taom_banners',groupLabel='TAOM',atlasSize=ATLAS_SIZE}) {
+  if(![1024,2048,4096].includes(atlasSize))throw new Error('Choose a 1K, 2K or 4K atlas resolution.');
+  const ATLAS_SIZE=atlasSize,CELL_SIZE=atlasSize/4;
   faction=factionSlug(faction);category=categoryName(category);
   if(!Array.isArray(files)||!files.length||files.length>128)throw new Error('Choose between 1 and 128 PNGs. Extra images automatically start another 4×4 atlas.');
   if(!Number.isInteger(padding)||padding<0||padding>128)throw new Error('Padding must be between 0 and 128 pixels.');
@@ -191,7 +196,7 @@ export async function buildAtlases({files,faction,category,outputDirectory,sourc
   try{
     for(let page=0;page<total;page++){
       const plan=registration.atlases[page],name=plan.name,batch=files.slice(page*16,page*16+16).map((file,i)=>({...file,id:plan.icons[i].id}));
-      results.push({...await writeAtlasPage({name,files:batch,directory,padding,outline,mode,sourceOffset:page*16}),groupId:plan.groupId,groupName:plan.title});
+      results.push({...await writeAtlasPage({name,files:batch,directory,padding,outline,mode,sourceOffset:page*16,atlasSize}),groupId:plan.groupId,groupName:plan.title});
     }
     await fs.writeFile(path.join(directory,'banner_icons.xml'),registration.changed,{flag:'wx'});
     await fs.writeFile(path.join(directory,'banner_icons.additions.xml'),registration.snippet,{flag:'wx'});
