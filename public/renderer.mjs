@@ -98,10 +98,10 @@ export class BannerRenderer {
       const l=layers[index],position=bannerToCanvas(l.x,l.y,w,h,span);ctx.save();ctx.translate(position.x,position.y);ctx.rotate(-l.rotation*Math.PI/180);
       ctx.strokeStyle='#deb676';ctx.lineWidth=1.5;ctx.setLineDash([6,4]);ctx.strokeRect(-l.width*s/2,-l.height*s/2,l.width*s,l.height*s);
       ctx.setLineDash([]);ctx.fillStyle='#f3d49e';
-      for(const x of [-1,1])for(const y of [-1,1])ctx.fillRect(x*l.width*s/2-3,y*l.height*s/2-3,6,6);
+      if(picks.length===1)for(const x of [-1,0,1])for(const y of [-1,0,1])if(x||y)ctx.fillRect(x*Math.abs(l.width)*s/2-3,y*Math.abs(l.height)*s/2-3,6,6);
       ctx.restore();
     }
-    if(picks.length>1){const box=selectionBounds(layers,picks),point=bannerToCanvas(box.left,box.top,w,h,span);ctx.save();ctx.strokeStyle='#8dc9db';ctx.setLineDash([3,4]);ctx.strokeRect(point.x,point.y,box.width*s,box.height*s);ctx.restore();}
+    if(picks.length>1){const box=selectionBounds(layers,picks),point=bannerToCanvas(box.left,box.top,w,h,span);ctx.save();ctx.strokeStyle='#8dc9db';ctx.setLineDash([3,4]);ctx.strokeRect(point.x,point.y,box.width*s,box.height*s);ctx.fillStyle='#bfe6f0';for(const x of [0,.5,1])for(const y of [0,.5,1])if(x!==.5||y!==.5)ctx.fillRect(point.x+x*box.width*s-3,point.y+y*box.height*s-3,6,6);ctx.restore();}
     ctx.save();ctx.strokeStyle='#74dded';ctx.lineWidth=1.5;ctx.setLineDash([7,3]);
     if(Number.isFinite(snapLines.x)){const p=bannerToCanvas(snapLines.x,764,w,h,span);ctx.beginPath();ctx.moveTo(p.x,0);ctx.lineTo(p.x,h);ctx.stroke();}
     if(Number.isFinite(snapLines.y)){const p=bannerToCanvas(764,snapLines.y,w,h,span);ctx.beginPath();ctx.moveTo(0,p.y);ctx.lineTo(w,p.y);ctx.stroke();}ctx.restore();

@@ -1,6 +1,19 @@
 export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
   const $=id=>document.getElementById(id);
   let files=[],urls=[],result=null,active=0,busy=false;
+  const slug=text=>String(text).normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+  let autoName='';
+  const groupLabel=()=>{const select=$('atlasGroup');return select.value==='new'?$('atlasNewGroupName').value.trim():select.selectedOptions[0]?.dataset.name||'';};
+  function syncGroup(){
+    $('atlasNewGroupFields').hidden=$('atlasGroup').value!=='new';
+    const name=slug(groupLabel());if(name&&(!$('atlasFaction').value||$('atlasFaction').value===autoName)){$('atlasFaction').value=name;autoName=name;}
+  }
+  function selectedGroup(){
+    const value=$('atlasGroup').value;
+    if(value==='new'){const name=$('atlasNewGroupName').value.trim();if(!name)throw new Error('Name the new icon group.');const id=$('atlasNewGroupId').value;return id?{name,id:Number(id)}:{name};}
+    if(!value)throw new Error('Choose the icon group (people) these icons belong to, or create a new one.');
+    return {id:Number(value)};
+  }
   const error=message=>{$('atlasStatus').textContent=message;$('atlasStatus').className='atlas-status error';};
   function redrawFiles(){
     $('atlasFileList').replaceChildren();
@@ -46,9 +59,13 @@ export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
     try{
       const info=await api('/api/atlas-info');$('atlasFactions').replaceChildren();
       for(const faction of info.factions){const option=document.createElement('option');option.value=faction;$('atlasFactions').append(option);}
-      if(!$('atlasFaction').value)$('atlasFaction').value=info.factions[0]||'custom';
+      const select=$('atlasGroup'),previous=select.value;select.replaceChildren(new Option('Choose a group…',''));
+      for(const group of info.groups||[]){const option=new Option(group.name+' · '+group.id+' · '+group.icons+' icon'+(group.icons===1?'':'s'),String(group.id));option.dataset.name=group.name;select.append(option);}
+      select.append(new Option('+ New group…','new'));
+      if([...select.options].some(o=>o.value===previous))select.value=previous;syncGroup();
     }catch(e){error(e.message);}
   };
+  $('atlasGroup').onchange=syncGroup;$('atlasNewGroupName').oninput=syncGroup;
   $('closeAtlasButton').onclick=()=>{if(!busy)$('atlasDialog').close();};
   $('atlasDialog').addEventListener('cancel',e=>{if(busy)e.preventDefault();});
   $('atlasFiles').onchange=()=>{addFiles($('atlasFiles').files);$('atlasFiles').value='';};
@@ -57,14 +74,16 @@ export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
   zone.ondrop=e=>{e.preventDefault();zone.classList.remove('dragging');if(!busy)addFiles(e.dataTransfer.files);};
   $('clearAtlasFiles').onclick=()=>{urls.forEach(u=>URL.revokeObjectURL(u));files=[];urls=[];redrawFiles();};
   $('generateAtlasButton').onclick=async()=>{
+    let group;try{group=selectedGroup();if(!$('atlasFaction').value.trim())throw new Error('Enter an atlas file name.');}catch(e){error(e.message);return;}
     busy=true;redrawFiles();$('atlasStatus').className='atlas-status';$('atlasStatus').textContent='Reading PNGs and generating centred PSD layers…';
     $('closeAtlasButton').disabled=true;$('atlasFiles').disabled=true;$('clearAtlasFiles').disabled=true;
     const read=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:file.name,dataUrl:reader.result});reader.onerror=()=>reject(new Error('Could not read '+file.name));reader.readAsDataURL(file);});
     try{
-      result=await api('/api/atlas-build',{files:await Promise.all(files.map(read)),faction:$('atlasFaction').value,category:$('atlasCategory').value,mode:$('atlasMaskMode').value,padding:Number($('atlasPadding').value),outline:Number($('atlasOutline').value),install:$('atlasInstall').checked,startIndex:$('atlasNumber').value?Number($('atlasNumber').value):null});
+      result=await api('/api/atlas-build',{files:await Promise.all(files.map(read)),faction:$('atlasFaction').value,category:$('atlasCategory').value,mode:$('atlasMaskMode').value,padding:Number($('atlasPadding').value),outline:Number($('atlasOutline').value),install:$('atlasInstall').checked,startIndex:$('atlasNumber').value?Number($('atlasNumber').value):null,group});
       active=0;drawResult();
       if(result.registration.installed){try{await onInstalled();}catch(e){result.refreshWarning='Import saved. Reload the editor to refresh the symbol list.';}}
-      $('atlasStatus').className='atlas-status success';$('atlasStatus').textContent=`Created ${result.atlases.length} PSD${result.atlases.length>1?'s':''} · ${result.registration.installed?`Registered ${result.registration.icons} icons and installed transparent GUI thumbnails.`:'Review package saved with proposed XML entries and transparent thumbnails; module unchanged.'} ${result.refreshWarning||''}`;
+      const target=result.registration.group||result.group;const groupNote=target?` · ${target.created?'New group':'Group'} ${target.name} (${target.id})`:'';
+      $('atlasStatus').className='atlas-status success';$('atlasStatus').textContent=`Created ${result.atlases.length} PSD${result.atlases.length>1?'s':''}${groupNote} · ${result.registration.installed?`Registered ${result.registration.icons} icons and installed transparent GUI thumbnails.`:'Review package saved with proposed XML entries and transparent thumbnails; module unchanged.'} ${result.refreshWarning||''}`;
     }catch(e){error(e.message);}finally{busy=false;redrawFiles();$('closeAtlasButton').disabled=false;$('atlasFiles').disabled=false;$('clearAtlasFiles').disabled=false;}
   };
   redrawFiles();

@@ -7,9 +7,13 @@ import {randomUUID,createHash} from 'node:crypto';
 import {xxhash64} from 'hash-wasm';
 import {normalizeConfig,workspaceIdentity} from '../configuration.mjs';
 import {readResource,writeResource,validateResource,compileTexture,compileMaterial,guidBytes,textureLayout} from '../resource-compiler.mjs';
-import {mergeSpriteCategory,installGameDeployment,deploymentDirectory} from '../game-deployment.mjs';
+import {mergeSpriteCategory,installGameDeployment,deploymentDirectory,assertSupportedGameVersion} from '../game-deployment.mjs';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const u32=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;},str=s=>Buffer.concat([u32(Buffer.byteLength(s)),Buffer.from(s)]);
+test('resource compilation accepts the current Bannerlord 1.5 versions and names unsupported versions',()=>{
+ for(const version of ['v1.5.6','v1.5.6.125270','v1.5.7','v1.5.7.125802'])assert.doesNotThrow(()=>assertSupportedGameVersion(version));
+ for(const version of ['v1.5.8','v1.6.0',null])assert.throws(()=>assertSupportedGameVersion(version),/Installed Bannerlord version .* Supported versions: 1\.5\.6 and 1\.5\.7/);
+});
 async function textureTemplate(){const data=Buffer.from('texture-settings');return writeResource({packageId:randomUUID(),type:'c974cbcb-5f1c-49f6-9a32-2b5b6c92c2e8',id:randomUUID(),version:0,name:'fixture',metadata:Buffer.concat([u32(3),Buffer.alloc(20),str('$BASE/Modules/Fixture/fixture.png'),Buffer.alloc(13),u32(0),u32(2),Buffer.from([2]),u32(16),u32(16),u32(1),Buffer.from([1,1,0]),str('R8G8B8A8_UNORM'),Buffer.alloc(40)]),segments:[{type:'7c475be2-7c8d-431d-b0e1-53218d047fb9',owner:randomUUID(),actual:data.length,hash:BigInt('0x'+await xxhash64(data)),flags:4,format:0,data}]});}
 test('the resource compiler checks template integrity and retains identity while changing dimensions and pixels',async()=>{
  const template=await textureTemplate(),original=readResource(template);await validateResource(original);assert.deepEqual(await writeResource(original),template);

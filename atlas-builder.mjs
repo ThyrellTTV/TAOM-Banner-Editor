@@ -11,7 +11,7 @@ const MAX_PIXELS=67_108_864;
 const imageData=(data,width,height)=>({data:new Uint8ClampedArray(data),width,height});
 export function factionSlug(value) {
   const text=String(value||'').trim().toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
-  if(!text||text.length>50)throw new Error('Enter a faction name, such as Gondor or Rohan.');
+  if(!text||text.length>50)throw new Error('Enter an atlas file name, such as dunedain or haradrim.');
   return text;
 }
 export function categoryName(value) {
@@ -169,7 +169,7 @@ export async function writeAtlasPage({name,files,directory,padding=0,outline=0,m
   return {name,atlasSize,cellSize:CELL_SIZE,psd:name+'.psd',mask:name+'.mask.png',preview:name+'.preview.png',cells,installedPath:null};
 }
 
-export async function buildAtlases({files,faction,category,outputDirectory,sourceDirectory,modulePath,gamePath,install=true,padding=0,outline=0,mode='alpha',startIndex,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix='taom_banners',groupLabel='TAOM',atlasSize=ATLAS_SIZE}) {
+export async function buildAtlases({files,faction,category,outputDirectory,sourceDirectory,modulePath,gamePath,install=true,padding=0,outline=0,mode='alpha',startIndex,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix='taom_banners',groupLabel='TAOM',atlasSize=ATLAS_SIZE,group}) {
   if(![1024,2048,4096].includes(atlasSize))throw new Error('Choose a 1K, 2K or 4K atlas resolution.');
   const ATLAS_SIZE=atlasSize,CELL_SIZE=atlasSize/4;
   faction=factionSlug(faction);category=categoryName(category);
@@ -187,7 +187,7 @@ export async function buildAtlases({files,faction,category,outputDirectory,sourc
   const directory=path.join(path.resolve(outputDirectory),batchId);
   const total=Math.ceil(files.length/CELLS_PER_ATLAS);
   const planned=Array.from({length:total},(_,i)=>`${atlasPrefix}_${faction}_${category}_${String(index+i).padStart(2,'0')}`);
-  const registration=await planAtlasRegistration({modulePath,gamePath,registry,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix,groupLabel,atlases:planned.map((name,page)=>({name,count:Math.min(16,files.length-page*16)}))});
+  const registration=await planAtlasRegistration({modulePath,gamePath,registry,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix,groupLabel,group,atlases:planned.map((name,page)=>({name,count:Math.min(16,files.length-page*16)}))});
   if(install)for(const name of planned)if(await fs.stat(path.join(sourceDirectory,name+'.psd')).catch(()=>null))throw new Error('Atlas already exists: '+name+'.psd. Choose a new atlas number.');
   // Validate every input before creating any output or copying module files.
   for(const file of files){const meta=await sharp(file.data,{limitInputPixels:MAX_PIXELS}).metadata();if(meta.format!=='png')throw new Error(file.name+': only PNG files are supported.');}
@@ -200,7 +200,7 @@ export async function buildAtlases({files,faction,category,outputDirectory,sourc
     }
     await fs.writeFile(path.join(directory,'banner_icons.xml'),registration.changed,{flag:'wx'});
     await fs.writeFile(path.join(directory,'banner_icons.additions.xml'),registration.snippet,{flag:'wx'});
-    const manifest={version:2,batchId,createdAt:new Date().toISOString(),faction,category,atlasSize:ATLAS_SIZE,cellSize:CELL_SIZE,grid:{rows:4,columns:4},scaling:'downscale-only',centering:'visible-alpha-bounds',padding,outline,mode,directory,atlases:results,registration:{installed:false,xmlPath:registration.xmlPath,thumbnailDirectory:registration.thumbnailDirectory,icons:files.length}};
+    const manifest={version:2,batchId,createdAt:new Date().toISOString(),faction,category,group:registration.group||null,atlasSize:ATLAS_SIZE,cellSize:CELL_SIZE,grid:{rows:4,columns:4},scaling:'downscale-only',centering:'visible-alpha-bounds',padding,outline,mode,directory,atlases:results,registration:{installed:false,xmlPath:registration.xmlPath,thumbnailDirectory:registration.thumbnailDirectory,icons:files.length}};
     // Save the review package before touching the module.
     await fs.writeFile(path.join(directory,'manifest.json'),JSON.stringify(manifest,null,2),{flag:'wx'});
     if(install){manifest.registration=await installAtlasPackage({plan:registration,atlases:results,directory,sourceDirectory});await fs.writeFile(path.join(directory,'manifest.json'),JSON.stringify(manifest,null,2));}

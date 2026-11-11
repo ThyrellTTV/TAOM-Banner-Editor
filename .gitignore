@@ -27,3 +27,4 @@ runtime/
 *.profiles.json
 *.profiles.json.*.tmp
 .profiles/
+banner-ai/

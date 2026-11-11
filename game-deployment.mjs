@@ -46,6 +46,9 @@ async function packageIndex(config,root){
  for(const location of locations)await walk(location);return found;
 }
 const TYPES={texture:'c974cbcb-5f1c-49f6-9a32-2b5b6c92c2e8',material:'1db01393-6902-4f19-83ba-b37a39830717'};
+export function assertSupportedGameVersion(version){
+ if(!/^v?1\.5\.(?:6|7)(?:\.|$)/.test(version||''))throw new Error('Installed Bannerlord version '+(version||'unknown')+' is not supported for automatic resource compilation. Supported versions: 1.5.6 and 1.5.7.');
+}
 export async function resourceSettingOptions({config,root}){
  const registry=await readIconRegistry(config.modulePath,configPaths(config,root).registry),index=await packageIndex(config,root),materials=[];
  for(const name of [...new Set(registry.materials)]){const file=index.get(TYPES.material+':'+name);if(!file)continue;try{const data=materialLayout(readResource(await fs.readFile(file)).metadata);materials.push({name,blendMode:data.blendMode,alphaTest:data.alphaTest,flags:data.flags,shaderFlags:data.shaderFlags,vertexFlags:data.vertexFlags,shader:data.shader});}catch{}}
@@ -54,13 +57,15 @@ export async function resourceSettingOptions({config,root}){
 export async function buildGameDeployment({config,root,material,expected}){
  const resourceSettings=normalizeResourceSettings(config.resourceSettings);
  const p=configPaths(config,root),nativeFile=path.join(config.gamePath,'Modules/Native/SubModule.xml'),nativeBytes=await fs.readFile(nativeFile),nativeXml=nativeBytes.toString('utf8');
- if(!/^v?1\.5\.6(?:\.|$)/.test(parser.parse(nativeXml).Module?.Version?.value||''))throw new Error('Automatic resource compilation is currently verified for Bannerlord 1.5.6.');
+ assertSupportedGameVersion(parser.parse(nativeXml).Module?.Version?.value);
  const registry=await readIconRegistry(config.modulePath,p.registry),materials=[...new Set(registry.materials)];
  if(!materials.includes(material)||!/^[-a-z0-9_]{1,160}$/i.test(material))throw new Error('Choose a registered module atlas.');
  const source=await atlasSourceFile(p.atlasSources,material);if(!source)throw new Error('Atlas source PSD/PNG not found.');
  const bytes=await fs.readFile(source);if(expected&&(expected.xml!==sha(registry.original)||expected.source!==sha(bytes)))throw new Error('The atlas or registry changed. Reload it before compiling.');
  const moduleFile=path.join(config.modulePath,'SubModule.xml'),moduleBytes=await fs.readFile(moduleFile),moduleId=parser.parse(moduleBytes.toString('utf8')).Module?.Id?.value;
- if(!/^[-a-z0-9_.]{1,160}$/i.test(moduleId)||path.basename(config.modulePath)!==moduleId)throw new Error('Resource compilation requires the source module folder name to match its SubModule ID.');
+ // Project sources can live in _Module. The sprite-packer staging folder and
+ // engine source references use SubModule.xml's ID, independently of that name.
+ if(!/^[-a-z0-9_.]{1,160}$/i.test(moduleId))throw new Error('Resource compilation requires a valid SubModule ID.');
  const category=path.basename(p.thumbnails);if(!/^ui_[-a-z0-9_]+$/i.test(category))throw new Error('The GUI thumbnail category must be named ui_<category>.');
  const relative=file=>{insideModule(config.modulePath,path.relative(config.modulePath,file));return path.relative(config.modulePath,file).replaceAll('\\','/');};
  const sourceRelative=relative(source),thumbnailRelative=relative(p.thumbnails),registryRelative=relative(p.registry);

@@ -82,7 +82,9 @@ The **Game deployment** review shows the exact changed files, sizes and destinat
 
 Builds live under the active profile's `game-builds/deploy-<batch>/`. Building changes no module files. Deployment verifies input and destination snapshots, saves exact originals under the build's `originals/` folder, writes resource data before XML mappings, and restores written files on failure. The game and Modding Kit must be closed when deploying. Restart Bannerlord afterwards to load the changed resources. The selected atlas and shared banner thumbnail resources are included; other atlases, UI categories, module binaries and campaign files are not rebuilt.
 
-**Supported compiler:** the editable single-resource TPAC v2 / texture metadata v3 / material metadata v0 format verified in **Bannerlord 1.5.6**. The active module must supply compatible existing banner material/texture and GUI sheet templates, a `GUI/<module ID>SpriteData.xml`, and its thumbnail category in `GUI/SpriteParts/Config.xml`. Module folder names must match their SubModule IDs, and source artwork/thumbnail folders must be inside the source module. Installed TaleWorlds editor sprite-generator binaries and .NET Framework 4.8 are required for packing; vendor binaries are resolved from the user's installation and are not redistributed.
+**Supported compiler:** the editable single-resource TPAC v2 / texture metadata v3 / material metadata v0 format verified in **Bannerlord 1.5.6 and 1.5.7**. The active module must supply compatible existing banner material/texture and GUI sheet templates, a `GUI/<module ID>SpriteData.xml`, and its thumbnail category in `GUI/SpriteParts/Config.xml`. Source folders can use project layouts such as `Main/_Module`; the installed module folder must match its SubModule ID. Source artwork/thumbnail folders must be inside the source module. Installed TaleWorlds editor sprite-generator binaries and .NET Framework 4.8 are required for packing; vendor binaries are resolved from the user's installation and are not redistributed.
+
+Choose the source folder that your mod build deploys. If a build copies an older texture descriptor over a newly deployed runtime cache, Bannerlord can interpret the pixels with the wrong compression format. Keep the editable sources, TPAC files and runtime caches together in the owning source module.
 
 The default remains **uncompressed RGBA8 with one mip**, preserving the working output. Compression, resolution and material options are now configurable as described below. Native loader/render tests cover newly generated resources and dimension changes; this is a focused banner compiler, not a general asset importer.
 
@@ -196,6 +198,28 @@ Native symbols, materials and background geometry come from the installed game's
 Startup and Reload refresh source XML/XSLT and changed PSD composites. After changing asset registrations/material packages, use Module settings → Rebuild asset cache. Generated data lives under `cache/`. Extraction details are in `logs/extraction.log` after a rebuild.
 
 Some module definitions can reference symbols or palette colours missing from their configured registries. Validation lists the affected banners, while the editor preserves their original values. No source data is silently substituted.
+
+## AI-assisted banners (CLI)
+
+`banner-ai.mjs` is a headless toolkit meant to be driven by Claude Code (or by hand). It uses the active profile and the asset cache the editor already extracted. Open the editor once first. Run `npm run ai -- help` for all options.
+
+```powershell
+node .\banner-ai.mjs brief "House of Eorling"     # clan, kingdom, siblings, icon groups, colours + PNG sheets
+node .\banner-ai.mjs kingdoms                     # kingdom → icon groups inferred from usage
+node .\banner-ai.mjs nearest '#1d5c2e' --sigil    # snap a lore colour to palette IDs (CIE Lab ΔE)
+node .\banner-ai.mjs render <code|clan> --out x.png
+node .\banner-ai.mjs draft clan_vlandia_12 --code <code> --name "…" --notes "…"
+node .\banner-ai.mjs alpha prep <file|url> --name sun --source <url> --licence CC-BY-4.0 --author "…"
+node .\banner-ai.mjs alpha stage sun --group 210  # review package in atlas-builds/, nothing installed
+node .\banner-ai.mjs alpha install <batchId>      # dev module, with backups + credits entry
+```
+
+- **Kingdoms.** A clan belongs to a kingdom via its `super_faction`. XSLT-patched SandBox clans fall back to the native `spclans.xml`, and then to culture. Icon groups for a kingdom are inferred from the banners of that kingdom and its clans. `map init` seeds `banner-ai/faction-map.json`, where groups can be added or excluded and a researched colour scheme with sources can be stored.
+- **Previews.** `node-renderer.mjs` ports the editor's shader rules, mesh backgrounds and 1528-unit transform. Briefs and drafts write PNGs under `banner-ai/out/<clan>/`, including a current-vs-proposal comparison.
+- **Drafts** go to `drafts/` and are bound to the clan's source entry. Open one in the editor, review it, then use **Save to module** as usual. That step mirrors the banner to the installed copy when sync is on.
+- **Alphas.** `alpha prep` accepts PNG, SVG, JPG, WebP, GIF, TIFF and AVIF, from a file or a URL. It bakes a white transparent mask; `--mode auto` detects alpha, dark-on-light or light-on-dark artwork, and `--levels` removes JPEG noise. It warns when the mask looks inverted. `alpha stage` chooses an editable atlas of the group that has free slots and writes a normal atlas-manager review package. Replacing occupied slots requires an explicit `--slots`, and the command lists the banners that use those icons. `alpha new-atlas` builds a fresh atlas when none has room.
+- **Credits.** Every installed icon records its name, author, licence and source URL in `banner-ai/credits.json` and `banner-ai/CREDITS.md`.
+- **Game.** After installing, reload the editor, then use **Atlas manager → Build game resources → Deploy** with the game closed. The CLI never compiles or deploys game resources.
 
 ## Development
 

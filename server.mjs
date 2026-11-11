@@ -10,12 +10,19 @@ import { prepareSourceTextures } from './prepare-assets.mjs';
 import { decode } from './public/banner-code.mjs';
 import sharp from 'sharp';
 import { buildAtlases } from './atlas-builder.mjs';
+import { readIconRegistry,iconGroupOptions } from './atlas-registration.mjs';
 import {readConfig,configPaths,workspaceSignature,workspaceIdentity,assetFingerprint,validateConfig,DEFAULT_PORT} from './configuration.mjs';
 import {readProfiles,profileSummary,planProfileSettings,planProfileSwitch,persistProfiles,persistProfileCatalog} from './profiles.mjs';
 import {atlasCatalog,atlasDetails,stageAtlasEdit,installAtlasEdit,managedDirectory,maskThumbnail} from './atlas-manager.mjs';
 import {validateAssets} from './asset-validation.mjs';
 import {buildGameDeployment,installGameDeployment,deploymentDirectory,resourceSettingOptions} from './game-deployment.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
+// New atlases join an existing icon group {id} or create one {name, id?}.
+const atlasGroup=group=>{
+  if(group==null)throw new Error('Choose an icon group for the new atlas, or name a new one.');
+  if(typeof group.name==='string'&&group.name.trim())return {name:group.name,id:group.id==null||group.id===''?undefined:Number(group.id)};
+  const id=Number(group.id);if(!Number.isSafeInteger(id))throw new Error('Choose an icon group for the new atlas, or name a new one.');return {id};
+};
 const configFile=path.resolve(process.env.BANNER_STUDIO_CONFIG||path.join(root,'config.json'));
 let {config,error:setupError}=await readConfig(root,configFile);
 const port=Number(process.env.BANNER_STUDIO_PORT||process.env.TAOM_EDITOR_PORT||config.port||DEFAULT_PORT);
@@ -102,7 +109,7 @@ const server = http.createServer(async(req,res)=>{
         const result=await enqueue(async()=>{
           assertWorkspace(data);
           const modulePath=config.modulePath,p=configPaths(config,root);
-          const result=await buildAtlases({files,faction:data.faction,category:data.category,modulePath,gamePath:config.gamePath,outputDirectory:path.join(dataRoot(),'atlas-builds'),sourceDirectory:p.atlasSources,registryFile:p.registry,nativeRegistryFile:p.nativeRegistry,thumbnailDirectory:p.thumbnails,atlasPrefix:config.atlasPrefix,groupLabel:config.moduleName,atlasSize:config.resourceSettings.newAtlasSize,install:data.install!==false,padding:Number(data.padding??0),outline:Number(data.outline??0),mode:data.mode||'alpha',startIndex:data.startIndex==null?undefined:Number(data.startIndex)});
+          const result=await buildAtlases({files,faction:data.faction,category:data.category,modulePath,gamePath:config.gamePath,outputDirectory:path.join(dataRoot(),'atlas-builds'),sourceDirectory:p.atlasSources,registryFile:p.registry,nativeRegistryFile:p.nativeRegistry,thumbnailDirectory:p.thumbnails,atlasPrefix:config.atlasPrefix,groupLabel:config.moduleName,atlasSize:config.resourceSettings.newAtlasSize,install:data.install!==false,padding:Number(data.padding??0),outline:Number(data.outline??0),mode:data.mode||'alpha',startIndex:data.startIndex==null?undefined:Number(data.startIndex),group:atlasGroup(data.group)});
           if(result.registration.installed){try{await refresh();}catch(error){result.refreshWarning='Import saved, but editor refresh failed: '+error.message;}}
           return result;
         });
@@ -175,7 +182,8 @@ const server = http.createServer(async(req,res)=>{
       const folder=configPaths(config,root).atlasSources;
       const names=await fs.readdir(folder).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
       const factions=[...new Set(names.filter(n=>n.startsWith(config.atlasPrefix+'_')).map(n=>n.slice(config.atlasPrefix.length+1).match(/^(.+)_(?:alpha|ornaments)_\d+\.psd$/i)?.[1]).filter(Boolean))].sort();
-      return send(res,200,{factions,folder,atlasSize:config.resourceSettings.newAtlasSize,cellSize:config.resourceSettings.newAtlasSize/4});
+      const groups=iconGroupOptions(await readIconRegistry(config.modulePath,configPaths(config,root).registry)).map(({id,name,icons})=>({id,name,icons}));
+      return send(res,200,{factions,groups,folder,atlasSize:config.resourceSettings.newAtlasSize,cellSize:config.resourceSettings.newAtlasSize/4});
     }
     if(url.pathname.startsWith('/api/atlas-file/')){
       const parts=url.pathname.slice('/api/atlas-file/'.length).split('/').map(decodeURIComponent);

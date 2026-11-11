@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "atlas": "node build-atlas.mjs",
+    "ai": "node banner-ai.mjs",
     "extract": "dotnet run --project extractor/Extractor.csproj --configuration Release -- config.json",
     "test": "node --test test/*.test.mjs"
   },

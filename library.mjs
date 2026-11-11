@@ -25,7 +25,7 @@ export async function loadLibrary(modulePath, gamePath,options={}) {
     }
     for (const color of list(doc.BannerIconData.BannerColors?.Color)) {
       const hex = String(color.hex || color.color || '').replace(/^0x/i,'').padStart(8,'0');
-      colors.set(Number(color.id), { id:Number(color.id), hex:'#' + hex.slice(-6), alpha:parseInt(hex.slice(0,2),16) / 255, argb:hex });
+      colors.set(Number(color.id), { id:Number(color.id), hex:'#' + hex.slice(-6), alpha:parseInt(hex.slice(0,2),16) / 255, argb:hex, source, forSigil:color.player_can_choose_for_sigil==='true', forBackground:color.player_can_choose_for_background==='true' });
     }
   }
   const banners = [];
@@ -45,7 +45,7 @@ export async function loadLibrary(modulePath, gamePath,options={}) {
         try {
           const layers = decode(value[attribute]);
           const relative = path.relative(modulePath, file).replaceAll('\\','/');
-          banners.push({ key:[relative,tag,value.id,attribute].join('::'), id:value.id, name:displayName(value.name || value.id), kind:tag === 'Kingdom' ? 'Kingdom' : tag === 'Faction' ? 'Clan' : tag, source:relative, attribute, tag, code:value[attribute], layerCount:layers.length, culture:value.culture || '' });
+          banners.push({ key:[relative,tag,value.id,attribute].join('::'), id:value.id, name:displayName(value.name || value.id), kind:tag === 'Kingdom' ? 'Kingdom' : tag === 'Faction' ? 'Clan' : tag, source:relative, attribute, tag, code:value[attribute], layerCount:layers.length, culture:value.culture || '', superFaction:value.super_faction || '' });
         } catch {}
       }
       for (const [key, child] of Object.entries(value)) if (typeof child === 'object') visit(child,key);
@@ -61,7 +61,7 @@ export async function loadLibrary(modulePath, gamePath,options={}) {
         try {
           const layers=decode(values[attribute]);
           const relative=path.relative(modulePath,file).replaceAll('\\','/');
-          banners.push({key:[relative,match[1],match[2],attribute].join('::'),id:match[2],name:displayName(values.name||match[2]),kind:match[1]==='Faction'?'Clan':match[1],tag:match[1],source:relative,attribute,code:values[attribute],layerCount:layers.length,culture:values.culture||'',format:'xslt-attribute',templateMatch:template.match});
+          banners.push({key:[relative,match[1],match[2],attribute].join('::'),id:match[2],name:displayName(values.name||match[2]),kind:match[1]==='Faction'?'Clan':match[1],tag:match[1],source:relative,attribute,code:values[attribute],layerCount:layers.length,culture:values.culture||'',superFaction:values.super_faction||'',format:'xslt-attribute',templateMatch:template.match});
         } catch {}
       }
     }
