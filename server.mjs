@@ -127,6 +127,14 @@ const server = http.createServer(async(req,res)=>{
         await fs.writeFile(path.join(dataRoot(),'drafts',id+'.json'),JSON.stringify(draft,null,2));
         return send(res,200,draft);
       }
+      if(url.pathname==='/api/drafts/delete') {
+        assertWorkspace(data);
+        if(typeof data.id!=='string'||!/^[a-z0-9-]+$/.test(data.id))throw new Error('Invalid draft id.');
+        // Move rather than unlink, so a mistaken delete can be recovered from backups/deleted-drafts.
+        const trash=path.join(dataRoot(),'backups','deleted-drafts');await fs.mkdir(trash,{recursive:true});
+        await fs.rename(path.join(dataRoot(),'drafts',data.id+'.json'),path.join(trash,data.id+'-'+Date.now()+'.json')).catch(e=>{if(e.code==='ENOENT')throw new Error('Draft was not found.');throw e;});
+        return send(res,200,{ok:true});
+      }
       if(url.pathname==='/api/export') {
         assertWorkspace(data);
         if(typeof data.png!=='string'||!data.png.startsWith('data:image/png;base64,'))throw new Error('Expected a PNG image.');

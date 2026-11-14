@@ -51,6 +51,24 @@ function permitNavigation(){return !dirty()||confirm('This banner has unsaved ed
 const thumbObserver=new IntersectionObserver(entries=>{for(const {isIntersecting,target} of entries)if(isIntersecting){thumbObserver.unobserve(target);target._draw?.();}},{rootMargin:'80px'});
 function thumbnail(canvas,layers,options={}){canvas.width=96;canvas.height=96;canvas._draw=()=>state.renderer.render(canvas,layers,{shape:'shield',...options}).catch(()=>{});thumbObserver.observe(canvas);}
 function clearThumbnails(container){container.querySelectorAll('canvas').forEach(c=>thumbObserver.unobserve(c));container.replaceChildren();}
+function closeDraftMenu(){document.querySelector('.context-menu')?.remove();}
+function showDraftMenu(draft,x,y){
+  closeDraftMenu();
+  const menu=document.createElement('div');menu.className='context-menu';menu.setAttribute('role','menu');
+  const remove=document.createElement('button');remove.className='danger';remove.setAttribute('role','menuitem');remove.textContent='Delete draft';
+  remove.onclick=()=>{closeDraftMenu();deleteDraft(draft);};
+  menu.append(remove);document.body.append(menu);
+  const box=menu.getBoundingClientRect();menu.style.left=Math.min(x,innerWidth-box.width-4)+'px';menu.style.top=Math.min(y,innerHeight-box.height-4)+'px';remove.focus();
+}
+async function deleteDraft(draft){
+  if(!confirm('Delete the draft “'+draft.name+'”? It is moved to the profile\'s backups/deleted-drafts folder.'))return;
+  try{
+    await api('/api/drafts/delete',{id:draft.id});
+    // An open draft stays on the canvas as unsaved work, so it can be saved again before switching away.
+    if(state.draft?.id===draft.id){state.draft=null;state.baseline='';}
+    state.drafts=await api('/api/drafts');renderLibrary();render();toast('Draft deleted.');
+  }catch(error){toast(error.message,true);}
+}
 function renderLibrary(){
   const query=$('librarySearch').value.toLowerCase();
   const items=state.kind==='drafts'?state.drafts:state.library.banners.filter(b=>state.kind==='all'||b.kind===state.kind);
@@ -64,6 +82,7 @@ function renderLibrary(){
     const name=document.createElement('strong');name.textContent=item.name;const sub=document.createElement('small');sub.textContent=isDraft?'Draft · '+new Date(item.savedAt).toLocaleDateString():item.kind+' · '+item.id;
     text.append(name,sub);button.append(canvas,text);button.title=item.name+'\n'+(item.source||'Local draft');
     button.onclick=()=>{if(!permitNavigation())return;setBanner(isDraft?state.library.banners.find(b=>b.key===item.sourceKey)||null:item,isDraft?item:null);};
+    if(isDraft)button.oncontextmenu=e=>{e.preventDefault();showDraftMenu(item,e.clientX,e.clientY);};
     $('bannerList').append(button);thumbnail(canvas,decode(item.code));
   }
   if(!filtered.length){const empty=document.createElement('div');empty.className='empty-state';empty.textContent=state.kind==='drafts'?'Your saved drafts will appear here.':'No matching banners.';$('bannerList').append(empty);}
@@ -265,6 +284,9 @@ function bind(){
     if(state.loading||e.target.matches('input,textarea,select')||document.querySelector('dialog[open]'))return;
     const ctrl=e.ctrlKey||e.metaKey;if(ctrl&&e.key.toLowerCase()==='a'){e.preventDefault();state.selection=state.layers.slice(1).map((_,i)=>i+1);if(!state.selection.length)state.selection=[0];state.selected=state.selection.includes(state.selected)?state.selected:state.selection[0];render();}else if(ctrl&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redo():undo();}else if(ctrl&&e.key.toLowerCase()==='y'){e.preventDefault();redo();}else if(ctrl&&e.key.toLowerCase()==='d'){e.preventDefault();duplicate(e.shiftKey?'x':undefined);}else if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();remove();}else if(e.key==='Escape'){chooseLayer(state.selected);render();}else if(e.key.startsWith('Arrow')){e.preventDefault();const step=e.shiftKey?10:1;edit(()=>translateLayers(state.layers,picks(),e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0,e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0));}
   });
+  document.addEventListener('pointerdown',e=>{if(!e.target.closest('.context-menu'))closeDraftMenu();});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.querySelector('.context-menu')){e.stopImmediatePropagation();closeDraftMenu();}},true);
+  window.addEventListener('blur',closeDraftMenu);$('bannerList').addEventListener('scroll',closeDraftMenu);
   window.addEventListener('beforeunload',e=>{if(dirty()){e.preventDefault();e.returnValue='';}});
   uiBound=true;setEditorLoading(state.loading);
 }

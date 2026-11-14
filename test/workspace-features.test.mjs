@@ -94,6 +94,10 @@ test('profile API switches isolated drafts/caches, rejects stale writes and pres
     response=await post('/api/drafts',{name:'Second mod only',code:b.code,workspaceId:firstWorkspace});assert.equal(response.status,400);
     response=await post('/api/config',{modulePath:path.join(temp,'missing')});assert.notEqual(response.status,200);assert.equal(JSON.parse(await fs.readFile(file,'utf8')).modulePath,b.config.modulePath);
     response=await post('/api/profiles/switch',{id:first});assert.equal(response.status,200,await response.text());library=await fetch(base+'/api/library').then(r=>r.json());assert.equal(library.config.modulePath,a.config.modulePath);assert.equal((await fetch(base+'/api/drafts').then(r=>r.json()))[0].name,'First mod only');
+    const draftId=(await fetch(base+'/api/drafts').then(r=>r.json()))[0].id;
+    assert.equal((await post('/api/drafts/delete',{id:'../config'})).status,400);assert.equal((await post('/api/drafts/delete',{id:draftId,workspaceId:'stale'})).status,400);
+    response=await post('/api/drafts/delete',{id:draftId});assert.equal(response.status,200,await response.text());assert.deepEqual(await fetch(base+'/api/drafts').then(r=>r.json()),[]);
+    assert.equal((await fs.readdir(path.join(a.p.data,'backups','deleted-drafts'))).filter(f=>f.startsWith(draftId)).length,1);assert.equal((await post('/api/drafts/delete',{id:draftId})).status,400);
     response=await post('/api/profiles/delete',{id:second});assert.equal(response.status,200);assert.ok(await fs.stat(b.p.data));assert.equal((await fetch(base+'/api/profiles').then(r=>r.json())).profiles.length,1);
   }finally{child.kill();await once(child,'close');}
 }));
