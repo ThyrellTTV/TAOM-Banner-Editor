@@ -35,6 +35,14 @@ test('opaque monochrome art supports luminance masks and warns in transparency m
   assert.deepEqual(masked.trimmedBounds,{left:8,top:2,width:4,height:6});assert.equal(masked.warnings.length,0);
   assert.equal((await preparePng({name:'mono.png',data:png})).warnings.length,1);
 });
+test('two-tone art puts light pixels in the fill channel and dark pixels in the stroke channel',async()=>{
+  // 12×12 white square with a black 4px band through the middle, on transparency
+  const raw=Buffer.alloc(20*20*4);for(let y=4;y<16;y++)for(let x=4;x<16;x++){const i=(y*20+x)*4,dark=x>=8&&x<12;raw[i]=raw[i+1]=raw[i+2]=dark?0:255;raw[i+3]=255;}
+  const art=await preparePng({name:'two.png',data:await sharp(raw,{raw:{width:20,height:20,channels:4}}).png().toBuffer()},{outline:2,mode:'two-tone'});
+  const at=(x,y)=>Array.from(art.gameMask.subarray((y*art.width+x)*4,(y*art.width+x)*4+2));
+  assert.equal(art.width,16);assert.deepEqual(at(3,8),[0,255]);assert.deepEqual(at(8,8),[255,0]);assert.deepEqual(at(0,8),[255,0]);assert.deepEqual(at(8,0),[255,0]);
+  assert.equal(art.warnings.length,0);
+});
 test('builds verified 2048px layered PSDs, splits 17 PNGs, centres every cell, and preserves module files',async()=>{
   const temp=await fs.mkdtemp(path.join(os.tmpdir(),'taom-atlas-test-'));
   try{

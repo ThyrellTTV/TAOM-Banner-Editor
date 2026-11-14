@@ -59,12 +59,21 @@ test('new atlas can create a new group after the last one, with a localisation k
   await assert.rejects(planAtlasRegistration({modulePath,atlases:[{name:'a_b_alpha_01',count:1}],group:{id:555}}),/group/i);
 }));
 
-test('installing a grouped atlas build writes the PSD under the file name and icons under the people',async()=>fixture(async({temp,modulePath,sourceDirectory,xmlPath,sprites})=>{
-  const result=await buildAtlases({modulePath,sourceDirectory,files:[{name:'a.png',data:await png()},{name:'b.png',data:await png()}],faction:'Dúnedain',category:'alpha',outputDirectory:path.join(temp,'builds'),install:true,group:{id:100}});
+test('installing a grouped atlas build writes the PSD as the next taom_banners_NN and icons under the people',async()=>fixture(async({temp,modulePath,sourceDirectory,xmlPath,sprites})=>{
+  const result=await buildAtlases({modulePath,sourceDirectory,files:[{name:'a.png',data:await png()},{name:'b.png',data:await png()}],outputDirectory:path.join(temp,'builds'),install:true,group:{id:100}});
   assert.equal(result.group.id,100);assert.equal(result.registration.installed,true);
-  assert.deepEqual(await fs.readdir(sourceDirectory),['taom_banners_dunedain_alpha_01.psd']);
+  assert.deepEqual(await fs.readdir(sourceDirectory),['taom_banners_01.psd']);
   assert.deepEqual(members(await fs.readFile(xmlPath,'utf8'),100),[10000,10001,30001,30002]);
   assert.deepEqual((await fs.readdir(sprites)).sort(),['30001.png','30002.png']);
+}));
+
+test('a grouped page is numbered past every taom_banners_NN source (PSD or PNG) and ignores legacy names',async()=>fixture(async({temp,modulePath,sourceDirectory})=>{
+  await fs.writeFile(path.join(sourceDirectory,'taom_banners_07.png'),'packed sheet');
+  await fs.writeFile(path.join(sourceDirectory,'taom_banners_03.psd'),'page');
+  await fs.writeFile(path.join(sourceDirectory,'taom_banners_rhun_alpha_09.psd'),'legacy');
+  const result=await buildAtlases({modulePath,sourceDirectory,files:[{name:'a.png',data:await png()}],outputDirectory:path.join(temp,'builds'),install:false,group:{id:100}});
+  assert.equal(result.atlases[0].name,'taom_banners_08');
+  await assert.rejects(buildAtlases({modulePath,sourceDirectory,files:[{name:'a.png',data:await png()}],outputDirectory:path.join(temp,'builds'),install:true,startIndex:7,group:{id:100}}),/already exists: taom_banners_07\.png/);
 }));
 
 test('slot moves keep icon IDs and element text; moving into a new group creates it',async()=>fixture(async({modulePath})=>{

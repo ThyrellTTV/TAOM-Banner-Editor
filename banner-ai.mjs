@@ -21,15 +21,15 @@ const HELP=`banner-ai <command>
   atlases <groupId>                    Atlases holding a group, with free slots
   draft <clan|kingdom:id> --code <code> [--name n] [--notes text]
   alpha prep <file|url...> [--name n] [--source url] [--licence l] [--author a]
-             [--mode auto|alpha|light-on-dark|dark-on-light] [--levels lo,hi] [--invert] [--notes t]
+             [--mode auto|alpha|light-on-dark|dark-on-light|two-tone] [--levels lo,hi] [--invert] [--notes t]
   alpha sheet <slug...>                Contact sheet of prepared alphas
   alpha stage <slug...> --group <id> | --new-group "Name" [--group-id n]
                                        [--material m (required with --new-group)] [--slots auto|3,4] [--padding px] [--outline px]
   alpha install <batchId>              Install a staged review into the dev module (with backups)
   alpha new-atlas <slug...> --group <id> | --new-group "Name" [--group-id n]
-                                       [--faction file-name] [--category alpha] [--number n] [--install]
-                                       Icon group = the people the icons are listed under; --faction only
-                                       names the PSD (defaults to the group name).
+                                       [--number n] [--install]
+                                       Icon group = the people the icons are listed under; the page is
+                                       the next free taom_banners_NN (--number to choose NN).
 Add --json for machine-readable output.`;
 
 function parse(argv){
@@ -105,7 +105,7 @@ async function main(){
         return print(flags,result,r=>`Installed ${r.manifest.batchId} into ${ws.config.modulePath}\nbackups ${r.manifest.backupDirectory}\ncredits ${r.credits.map(c=>c.iconId+' '+c.name).join(', ')||'—'}\nNext: reload the editor, then Atlas manager → Build game resources → Deploy (game closed).`);
       }
       if(sub==='new-atlas'){
-        const result=await ai.newAtlas(ws,rest,{faction:flags.faction,group:flags.group,newGroup:flags['new-group'],groupId:flags['group-id'],category:flags.category||'alpha',padding:flags.padding||0,outline:flags.outline||0,install:!!flags.install,number:flags.number});
+        const result=await ai.newAtlas(ws,rest,{group:flags.group,newGroup:flags['new-group'],groupId:flags['group-id'],padding:flags.padding||0,outline:flags.outline||0,install:!!flags.install,number:flags.number});
         return print(flags,result,m=>`${m.registration.installed?'Installed':'Review package (not installed)'} ${m.batchId}\n`+(m.group?`${m.group.created?'new ':''}icon group ${m.group.name} (${m.group.id})\n`:'')+m.atlases.map(a=>`${a.name}: ${path.join(m.directory,a.preview)}  ids ${a.cells.map(c=>c.iconId).join(',')}`).join('\n')+(m.registration.installed?'':'\nRe-run with --install after review.'));
       }
       throw new Error('Unknown alpha command. '+HELP);

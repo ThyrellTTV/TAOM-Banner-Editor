@@ -6,6 +6,7 @@ import { writePsdBuffer, readPsd, initializeCanvas } from 'ag-psd';
 import {readIconRegistry,planAtlasRegistration,installAtlasPackage} from './atlas-registration.mjs';
 
 initializeCanvas(undefined,(width,height)=>({width,height,data:new Uint8ClampedArray(width*height*4)}));
+export const MASK_MODES=['alpha','light-on-dark','dark-on-light','two-tone'];
 export const ATLAS_SIZE=2048, CELL_SIZE=512, CELLS_PER_ATLAS=16;
 const MAX_PIXELS=67_108_864;
 const imageData=(data,width,height)=>({data:new Uint8ClampedArray(data),width,height});
@@ -58,16 +59,18 @@ export async function preparePng(file,{padding=0,outline=0,mode='alpha',cellSize
   if(info.format!=='png')throw new Error(file.name+': only PNG files are supported.');
   if((info.pages||1)>1)throw new Error(file.name+': use a still PNG instead of an animated PNG.');
   const {data,width,height}=await sharp(input,{limitInputPixels:MAX_PIXELS}).rotate().ensureAlpha().raw().toBuffer({resolveWithObject:true}).then(x=>({data:x.data,width:x.info.width,height:x.info.height}));
-  const mask=Buffer.from(data);let opaque=true;
+  // two-tone: alpha = symbol, luminance splits it — light pixels fill (colour 1), dark pixels go to the
+  // stroke channel (colour 2, shown when the layer's stroke is on), e.g. interior lines on a filled shape.
+  const twoTone=mode==='two-tone',mask=Buffer.from(data);let opaque=true;
   for(let i=0;i<mask.length;i+=4){
     const a=data[i+3];if(a<255)opaque=false;
     const lum=.2126*data[i]+.7152*data[i+1]+.0722*data[i+2];
-    mask[i]=mask[i+1]=mask[i+2]=255;
+    mask[i]=twoTone?255-Math.round(lum):255;mask[i+1]=mask[i+2]=255;
     mask[i+3]=Math.round(a*(mode==='light-on-dark'?lum/255:mode==='dark-on-light'?1-lum/255:1));
   }
   const bounds=alphaBounds(mask,width,height);
   if(!bounds)throw new Error(file.name+': the PNG has no visible artwork with this mask setting.');
-  if(!Number.isInteger(cellSize)||cellSize<2||cellSize>2048||!Number.isInteger(padding)||padding<0||!Number.isInteger(outline)||outline<0||outline>24||!['alpha','light-on-dark','dark-on-light'].includes(mode))throw new Error('Invalid symbol placement options.');
+  if(!Number.isInteger(cellSize)||cellSize<2||cellSize>2048||!Number.isInteger(padding)||padding<0||!Number.isInteger(outline)||outline<0||outline>24||!MASK_MODES.includes(mode))throw new Error('Invalid symbol placement options.');
   const available=cellSize-2*padding-2*outline;if(available<2)throw new Error('Padding and outline leave no room for artwork.');
   const factor=Math.min(1,available/bounds.width,available/bounds.height);
   const targetWidth=Math.max(1,Math.floor(bounds.width*factor));
@@ -80,8 +83,8 @@ export async function preparePng(file,{padding=0,outline=0,mode='alpha',cellSize
   const centred=centreOnPixelGrid(crop(resizedMask,targetWidth,after),after.width,after.height);
   const source=centreOnPixelGrid(crop(resizedOriginal,targetWidth,after),after.width,after.height);
   const outputWidth=centred.width+outline*2,outputHeight=centred.height+outline*2;
-  const coverage=Buffer.alloc(outputWidth*outputHeight);
-  for(let y=0;y<centred.height;y++)for(let x=0;x<centred.width;x++)coverage[(y+outline)*outputWidth+x+outline]=centred.data[(y*centred.width+x)*4+3];
+  const coverage=Buffer.alloc(outputWidth*outputHeight),secondary=Buffer.alloc(outputWidth*outputHeight);
+  for(let y=0;y<centred.height;y++)for(let x=0;x<centred.width;x++){const o=(y+outline)*outputWidth+x+outline,j=(y*centred.width+x)*4;coverage[o]=centred.data[j+3];if(twoTone)secondary[o]=centred.data[j];}
   let dilated=coverage;
   if(outline){
     // A separable max filter produces a reproducible outside stroke.
@@ -94,15 +97,16 @@ export async function preparePng(file,{padding=0,outline=0,mode='alpha',cellSize
     }
   }
   const gameMask=Buffer.alloc(outputWidth*outputHeight*4);
-  for(let i=0;i<coverage.length;i++){gameMask[i*4]=Math.max(0,dilated[i]-coverage[i]);gameMask[i*4+1]=coverage[i];gameMask[i*4+3]=255;}
+  for(let i=0;i<coverage.length;i++){const inner=Math.round(coverage[i]*secondary[i]/255);gameMask[i*4]=Math.min(255,Math.max(0,dilated[i]-coverage[i])+inner);gameMask[i*4+1]=coverage[i]-inner;gameMask[i*4+3]=255;}
   const warnings=[];
-  if(opaque&&mode==='alpha')warnings.push('PNG is fully opaque: its entire rectangle becomes the symbol. Use a transparent PNG or a black/white mask mode for a cutout.');
+  if(opaque&&(mode==='alpha'||twoTone))warnings.push('PNG is fully opaque: its entire rectangle becomes the symbol. Use a transparent PNG or a black/white mask mode for a cutout.');
   return {name:path.basename(file.name),gameMask,width:outputWidth,height:outputHeight,source,originalSize:{width,height},trimmedBounds:bounds,scale:factor,subpixelShift:{x:centred.shiftX,y:centred.shiftY},warnings};
 }
-async function availableStart(sourceDirectory,faction,category,requested,materials=[],atlasPrefix='taom_banners') {
+// prefix is <atlasPrefix>_ for grouped builds (universal <atlasPrefix>_NN pages) or the legacy
+// <atlasPrefix>_<faction>_<category>_; the next number follows every PSD/PNG source and registered material.
+async function availableStart(sourceDirectory,prefix,requested,materials=[]) {
   const names=await fs.readdir(sourceDirectory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
-  const prefix=atlasPrefix+'_'+faction+'_'+category+'_';
-  const used=[...names.filter(n=>n.endsWith('.psd')).map(n=>n.slice(0,-4)),...materials].filter(n=>n.startsWith(prefix)).map(n=>Number(n.slice(prefix.length))).filter(Number.isInteger);
+  const used=[...names.filter(n=>/\.(psd|png)$/i.test(n)).map(n=>n.slice(0,-4)),...materials].filter(n=>n.startsWith(prefix)&&/^\d+$/.test(n.slice(prefix.length))).map(n=>Number(n.slice(prefix.length)));
   if(requested!==undefined&&(!Number.isInteger(requested)||requested<1||requested>9999))throw new Error('Atlas number must be a whole number from 1 to 9999.');
   return requested??Math.max(0,...used)+1;
 }
@@ -134,7 +138,7 @@ export async function writeAtlasPage({name,files,directory,padding=0,outline=0,m
   const composite=Buffer.alloc(ATLAS_SIZE*ATLAS_SIZE*4);for(let p=3;p<composite.length;p+=4)composite[p]=255;
   const background=Buffer.from(composite),maskLayers=[],sourceLayers=[],cells=[];
   for(let item=0;item<files.length;item++){
-    const original=files[item],slot=original.textureIndex??item,art=await preparePng(original,{padding,outline,mode,cellSize:CELL_SIZE});
+    const original=files[item],slot=original.textureIndex??item,art=await preparePng(original,{padding,outline,mode:original.mode||mode,cellSize:CELL_SIZE});
     const row=Math.floor(slot/4),column=slot%4,cx=column*CELL_SIZE+CELL_SIZE/2,cy=row*CELL_SIZE+CELL_SIZE/2;
     const left=cx-art.width/2,top=cy-art.height/2;
     if(!Number.isInteger(left)||!Number.isInteger(top))throw new Error('Internal error: symbol did not land on the exact cell centre.');
@@ -172,23 +176,26 @@ export async function writeAtlasPage({name,files,directory,padding=0,outline=0,m
 export async function buildAtlases({files,faction,category,outputDirectory,sourceDirectory,modulePath,gamePath,install=true,padding=0,outline=0,mode='alpha',startIndex,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix='taom_banners',groupLabel='TAOM',atlasSize=ATLAS_SIZE,group}) {
   if(![1024,2048,4096].includes(atlasSize))throw new Error('Choose a 1K, 2K or 4K atlas resolution.');
   const ATLAS_SIZE=atlasSize,CELL_SIZE=atlasSize/4;
-  faction=factionSlug(faction);category=categoryName(category);
+  // Grouped builds (the UI and banner-ai) name pages <atlasPrefix>_NN: the icon group, not the file
+  // name, sets where icons are listed. Without a group the legacy <prefix>_<faction>_<category>_NN stays.
+  if(group==null){faction=factionSlug(faction);category=categoryName(category);}
   if(!Array.isArray(files)||!files.length||files.length>128)throw new Error('Choose between 1 and 128 PNGs. Extra images automatically start another 4×4 atlas.');
   if(!Number.isInteger(padding)||padding<0||padding>128)throw new Error('Padding must be between 0 and 128 pixels.');
   if(!Number.isInteger(outline)||outline<0||outline>24)throw new Error('Outline must be between 0 and 24 pixels.');
-  if(!['alpha','light-on-dark','dark-on-light'].includes(mode))throw new Error('Choose a valid PNG mask mode.');
+  if(!MASK_MODES.includes(mode))throw new Error('Choose a valid PNG mask mode.');
   if(CELL_SIZE-2*padding-2*outline<2)throw new Error('Padding and outline leave no room for artwork.');
   if(!sourceDirectory)throw new Error('A module banner source directory is required.');
   modulePath=path.resolve(modulePath||path.join(sourceDirectory,'..','..'));
   if(!/^[a-z][a-z0-9_]{0,79}$/.test(atlasPrefix))throw new Error('Invalid atlas naming prefix.');
   const registry=await readIconRegistry(modulePath,registryFile);
-  const index=await availableStart(sourceDirectory,faction,category,startIndex,registry.materials,atlasPrefix);
+  const pagePrefix=group==null?`${atlasPrefix}_${faction}_${category}_`:`${atlasPrefix}_`;
+  const index=await availableStart(sourceDirectory,pagePrefix,startIndex,registry.materials);
   const batchId=new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomUUID().slice(0,8);
   const directory=path.join(path.resolve(outputDirectory),batchId);
   const total=Math.ceil(files.length/CELLS_PER_ATLAS);
-  const planned=Array.from({length:total},(_,i)=>`${atlasPrefix}_${faction}_${category}_${String(index+i).padStart(2,'0')}`);
+  const planned=Array.from({length:total},(_,i)=>pagePrefix+String(index+i).padStart(2,'0'));
   const registration=await planAtlasRegistration({modulePath,gamePath,registry,registryFile,nativeRegistryFile,thumbnailDirectory,atlasPrefix,groupLabel,group,atlases:planned.map((name,page)=>({name,count:Math.min(16,files.length-page*16)}))});
-  if(install)for(const name of planned)if(await fs.stat(path.join(sourceDirectory,name+'.psd')).catch(()=>null))throw new Error('Atlas already exists: '+name+'.psd. Choose a new atlas number.');
+  if(install)for(const name of planned)for(const ext of ['.psd','.png'])if(await fs.stat(path.join(sourceDirectory,name+ext)).catch(()=>null))throw new Error('Atlas already exists: '+name+ext+'. Choose a new atlas number.');
   // Validate every input before creating any output or copying module files.
   for(const file of files){const meta=await sharp(file.data,{limitInputPixels:MAX_PIXELS}).metadata();if(meta.format!=='png')throw new Error(file.name+': only PNG files are supported.');}
   await fs.mkdir(path.join(directory,'sources'),{recursive:true});

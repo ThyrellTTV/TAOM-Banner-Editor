@@ -92,7 +92,9 @@ export async function buildGameDeployment({config,root,material,expected}){
  if(XMLValidator.validate(generated)!==true||!parsed)throw new Error('The generator did not produce valid SpriteData.');
  const parts=list(parsed.SpriteParts?.SpritePart),sprites=list(parsed.Sprites?.GenericSprite),categories=list(parsed.SpriteCategories?.SpriteCategory);if(categories.length!==1||categories[0].Name!==category||parts.length!==names.length||sprites.length!==names.length||new Set(parts.map(i=>i.Name)).size!==names.length)throw new Error('Incomplete generated thumbnail mapping.');
  const index=await packageIndex(config,root),get=(type,name)=>index.get(TYPES[type]+':'+name);
- const textureTemplateFile=materials.map(name=>get('texture',name)).find(Boolean),materialTemplateFile=resourceSettings.material.template?get('material',resourceSettings.material.template):materials.map(name=>get('material',name)).find(Boolean),guiTemplateFile=get('texture',category+'_1');
+ // Templates come from a registered atlas, or the configured template material while every registered
+ // atlas is new (e.g. right after renaming them all); a configured template that no longer exists falls back.
+ const template=resourceSettings.material.template,textureTemplateFile=materials.map(name=>get('texture',name)).find(Boolean)||(template&&get('texture',template)),materialTemplateFile=(template&&get('material',template))||materials.map(name=>get('material',name)).find(Boolean),guiTemplateFile=get('texture',category+'_1');
  if(!textureTemplateFile||!materialTemplateFile||!guiTemplateFile)throw new Error('This module needs existing editable banner texture/material and GUI texture templates for automatic compilation.');
  const textureTemplate=await input(textureTemplateFile),materialTemplate=await input(materialTemplateFile),guiTemplate=await input(guiTemplateFile);
  async function compile(name,sourceData,rgba,width,height,sourcePath,template,kind,sourceWidth=width,sourceHeight=height){

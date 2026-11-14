@@ -207,7 +207,7 @@ export async function writeDraft(ws,{clan:query,code,name,notes=''}){
 }
 
 // ---------- alphas ----------
-const MODES=['alpha','light-on-dark','dark-on-light'];
+const MODES=['alpha','light-on-dark','dark-on-light','two-tone'];
 async function fetchSource(input,directory){
   if(!/^https?:\/\//i.test(input)){const data=await fs.readFile(input);return {data,original:path.resolve(input),name:path.basename(input),url:null};}
   const response=await fetch(input,{headers:{'User-Agent':'banner-editor-asset-fetch/1.0'}});
@@ -224,6 +224,13 @@ export function chooseMode({data,width,height}){
   for(let y=0;y<height;y++)for(let x=0;x<width;x++){if(x>=margin&&y>=margin&&x<width-margin&&y<height-margin)continue;const i=(y*width+x)*4;sum+=.2126*data[i]+.7152*data[i+1]+.0722*data[i+2];n++;}
   return sum/n>=128?'dark-on-light':'light-on-dark';
 }
+// two-tone source: keep alpha, grey = luminance (light = colour 1 fill, dark = colour 2 via the stroke channel).
+function twoToneSource({data,width,height}){
+  const out=Buffer.alloc(width*height*4);let covered=0;
+  for(let i=0;i<out.length;i+=4){const lum=Math.round(.2126*data[i]+.7152*data[i+1]+.0722*data[i+2]);out[i]=out[i+1]=out[i+2]=lum;out[i+3]=data[i+3];if(data[i+3]>127)covered++;}
+  return {data:out,width,height,warnings:covered?[]:['Mask is empty.']};
+}
+const maskMode=mode=>mode==='two-tone'?'two-tone':'alpha';
 export function bakeMask({data,width,height},{mode,levels,invert=false}){
   const [lo,hi]=levels||(mode==='alpha'?[0,1]:[.12,.88]),out=Buffer.alloc(width*height*4);let border=0,borderCount=0,covered=0;
   for(let y=0;y<height;y++)for(let x=0;x<width;x++){
@@ -246,12 +253,12 @@ export async function prepareAlpha(ws,input,{name,source,licence='',author='',mo
   const raw=await sharp(fetched.data,{density,limitInputPixels:80_000_000,pages:1}).rotate().resize(1400,1400,{fit:'inside',withoutEnlargement:meta.format!=='svg'}).ensureAlpha().raw().toBuffer({resolveWithObject:true});
   const image={data:raw.data,width:raw.info.width,height:raw.info.height},chosen=mode==='auto'?chooseMode(image):mode;
   if(!MODES.includes(chosen))throw new Error('Mode must be auto, '+MODES.join(', ')+'.');
-  const baked=bakeMask(image,{mode:chosen,levels,invert});
+  const baked=chosen==='two-tone'?twoToneSource(image):bakeMask(image,{mode:chosen,levels,invert});
   let slug=slugify(name||path.parse(fetched.name).name);
   // Never silently overwrite a different prepared source; re-preparing the same original is fine.
   for(let n=2;;n++){const existing=await readJson(path.join(directory,slug+'.json'),null);if(!existing||existing.original===fetched.original||fetched.url&&existing.source===fetched.url)break;slug=slugify(name||path.parse(fetched.name).name)+'-'+n;}
   const png=await sharp(baked.data,{raw:{width:baked.width,height:baked.height,channels:4}}).png().toBuffer();
-  const art=await preparePng({name:slug+'.png',data:png},{cellSize:512,mode:'alpha'}).catch(error=>{throw new Error(slug+': '+error.message);});
+  const art=await preparePng({name:slug+'.png',data:png},{cellSize:512,mode:maskMode(chosen)}).catch(error=>{throw new Error(slug+': '+error.message);});
   await fs.mkdir(directory,{recursive:true});await fs.writeFile(path.join(directory,slug+'.png'),png);
   const record={slug,name:name||path.parse(fetched.name).name,file:slug+'.png',source:source||fetched.url||fetched.original,original:fetched.original,licence,author,notes,mode:chosen,levels:levels||null,invert,format:meta.format,size:[image.width,image.height],warnings:[...baked.warnings,...art.warnings],preparedAt:new Date().toISOString()};
   await writeJson(path.join(directory,slug+'.json'),record);
@@ -273,7 +280,7 @@ async function preparedAlpha(ws,slug){
   return {record,data:await fs.readFile(path.join(directory,record.file))};
 }
 export async function preparedSheet(ws,slugs,file){
-  const prepared=[];for(const slug of slugs){const {record,data}=await preparedAlpha(ws,slug);prepared.push({...record,art:await preparePng({name:record.file,data},{cellSize:512,mode:'alpha'})});}
+  const prepared=[];for(const slug of slugs){const {record,data}=await preparedAlpha(ws,slug);prepared.push({...record,art:await preparePng({name:record.file,data},{cellSize:512,mode:maskMode(record.mode)})});}
   return alphaContactSheet(prepared,file);
 }
 export async function freeSlots(ws,material){const detail=await atlasDetails({config:ws.config,root:ws.root,library:ws.library,material}),used=new Set(detail.icons.map(i=>i.slot));return {detail,free:Array.from({length:16},(_,i)=>i).filter(i=>!used.has(i))};}
@@ -302,7 +309,7 @@ export async function stageAlphas(ws,slugs,{group,newGroup,groupId:newGroupId,ma
   if(chosen.length!==items.length)throw new Error(material+' has '+free.length+' free slot(s) ('+free.join(',')+'); '+items.length+' alpha(s) requested.');
   const replacing=chosen.filter(s=>!free.includes(s));
   const pad=padding??Math.round(detail.cellSize*.02);
-  const actions=items.map((item,i)=>({type:'replace',slot:chosen[i],file:{name:item.record.file,dataUrl:'data:image/png;base64,'+item.data.toString('base64')},mode:'alpha',padding:pad,outline:Number(outline),...target}));
+  const actions=items.map((item,i)=>({type:'replace',slot:chosen[i],file:{name:item.record.file,dataUrl:'data:image/png;base64,'+item.data.toString('base64')},mode:maskMode(item.record.mode),padding:pad,outline:Number(outline),...target}));
   const manifest=await stageAtlasEdit({config:ws.config,root:ws.root,library:ws.library,material,expected:detail.snapshot,actions});
   const record={batchId:manifest.batchId,material,groupId:groupId??null,newGroups:manifest.newGroups||[],createdAt:manifest.createdAt,items:items.map((item,i)=>({slot:chosen[i],slug:item.record.slug,existingIds:detail.icons.filter(x=>x.slot===chosen[i]).map(x=>x.id)})),replacing};
   await writeJson(path.join(ws.ai,'stages',manifest.batchId+'.json'),record);
@@ -319,13 +326,12 @@ export async function installAlphas(ws,batchId){
   await addCredits(ws,credits);
   return {manifest,credits};
 }
-export async function newAtlas(ws,slugs,{faction,group,newGroup,groupId,category='alpha',padding=0,outline=0,install=false,number}){
+export async function newAtlas(ws,slugs,{group,newGroup,groupId,padding=0,outline=0,install=false,number}){
   const target=iconGroupTarget(ws,{group,newGroup,groupId});
   const atlasGroup=target.newGroup?{name:target.newGroup,...(target.newGroupId===undefined?{}:{id:target.newGroupId})}:{id:target.groupId};
-  // The atlas file name defaults to the people's name, e.g. Dúnedain → taom_banners_dunedain_alpha_NN.
-  faction=faction||target.newGroup||String(ws.library.groups.find(g=>g.id===target.groupId)?.name||'').replace(/^\{[^}]*\}/,'');
+  // Grouped pages are named <atlasPrefix>_NN; the icon group decides where the icons are listed.
   const items=[];for(const slug of slugs)items.push(await preparedAlpha(ws,slug));
-  const p=ws.paths,manifest=await buildAtlases({files:items.map(i=>({name:i.record.file,data:i.data})),faction,category,modulePath:ws.config.modulePath,gamePath:ws.config.gamePath,outputDirectory:path.join(ws.dataRoot,'atlas-builds'),sourceDirectory:p.atlasSources,registryFile:p.registry,nativeRegistryFile:p.nativeRegistry,thumbnailDirectory:p.thumbnails,atlasPrefix:ws.config.atlasPrefix,groupLabel:ws.config.moduleName,atlasSize:ws.config.resourceSettings.newAtlasSize,startIndex:number===undefined?undefined:Number(number),install,padding:Number(padding),outline:Number(outline),mode:'alpha',group:atlasGroup});
+  const p=ws.paths,manifest=await buildAtlases({files:items.map(i=>({name:i.record.file,data:i.data,mode:maskMode(i.record.mode)})),modulePath:ws.config.modulePath,gamePath:ws.config.gamePath,outputDirectory:path.join(ws.dataRoot,'atlas-builds'),sourceDirectory:p.atlasSources,registryFile:p.registry,nativeRegistryFile:p.nativeRegistry,thumbnailDirectory:p.thumbnails,atlasPrefix:ws.config.atlasPrefix,groupLabel:ws.config.moduleName,atlasSize:ws.config.resourceSettings.newAtlasSize,startIndex:number===undefined?undefined:Number(number),install,padding:Number(padding),outline:Number(outline),mode:'alpha',group:atlasGroup});
   if(install){
     const credits=[];for(const atlas of manifest.atlases)for(const cell of atlas.cells){const item=items.find(i=>i.record.file===cell.source);if(item)credits.push(creditFor(item.record,{iconId:cell.iconId,material:atlas.name,slot:cell.textureIndex,batchId:manifest.batchId}));}
     await addCredits(ws,credits);

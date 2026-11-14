@@ -1,12 +1,8 @@
 export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
   const $=id=>document.getElementById(id);
   let files=[],urls=[],result=null,active=0,busy=false;
-  const slug=text=>String(text).normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
-  let autoName='';
-  const groupLabel=()=>{const select=$('atlasGroup');return select.value==='new'?$('atlasNewGroupName').value.trim():select.selectedOptions[0]?.dataset.name||'';};
   function syncGroup(){
     $('atlasNewGroupFields').hidden=$('atlasGroup').value!=='new';
-    const name=slug(groupLabel());if(name&&(!$('atlasFaction').value||$('atlasFaction').value===autoName)){$('atlasFaction').value=name;autoName=name;}
   }
   function selectedGroup(){
     const value=$('atlasGroup').value;
@@ -57,8 +53,7 @@ export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
     $('atlasDialog').showModal();
     const cfg=getLibrary().config,size=cfg.resourceSettings?.newAtlasSize||2048;$('atlasIntro').textContent=size+'×'+size+' PSD · sixteen '+size/4+'×'+size/4+' cells · oversized artwork scales down · smaller artwork keeps its original size.'; $('atlasDestination').textContent=cfg.moduleName+' · '+cfg.atlasSourceDirectory+' + '+cfg.bannerIconsFile+' + '+cfg.thumbnailDirectory;
     try{
-      const info=await api('/api/atlas-info');$('atlasFactions').replaceChildren();
-      for(const faction of info.factions){const option=document.createElement('option');option.value=faction;$('atlasFactions').append(option);}
+      const info=await api('/api/atlas-info');
       const select=$('atlasGroup'),previous=select.value;select.replaceChildren(new Option('Choose a group…',''));
       for(const group of info.groups||[]){const option=new Option(group.name+' · '+group.id+' · '+group.icons+' icon'+(group.icons===1?'':'s'),String(group.id));option.dataset.name=group.name;select.append(option);}
       select.append(new Option('+ New group…','new'));
@@ -74,12 +69,12 @@ export function setupAtlasUI({api,getLibrary,onInstalled=async()=>{}}) {
   zone.ondrop=e=>{e.preventDefault();zone.classList.remove('dragging');if(!busy)addFiles(e.dataTransfer.files);};
   $('clearAtlasFiles').onclick=()=>{urls.forEach(u=>URL.revokeObjectURL(u));files=[];urls=[];redrawFiles();};
   $('generateAtlasButton').onclick=async()=>{
-    let group;try{group=selectedGroup();if(!$('atlasFaction').value.trim())throw new Error('Enter an atlas file name.');}catch(e){error(e.message);return;}
+    let group;try{group=selectedGroup();}catch(e){error(e.message);return;}
     busy=true;redrawFiles();$('atlasStatus').className='atlas-status';$('atlasStatus').textContent='Reading PNGs and generating centred PSD layers…';
     $('closeAtlasButton').disabled=true;$('atlasFiles').disabled=true;$('clearAtlasFiles').disabled=true;
     const read=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:file.name,dataUrl:reader.result});reader.onerror=()=>reject(new Error('Could not read '+file.name));reader.readAsDataURL(file);});
     try{
-      result=await api('/api/atlas-build',{files:await Promise.all(files.map(read)),faction:$('atlasFaction').value,category:$('atlasCategory').value,mode:$('atlasMaskMode').value,padding:Number($('atlasPadding').value),outline:Number($('atlasOutline').value),install:$('atlasInstall').checked,startIndex:$('atlasNumber').value?Number($('atlasNumber').value):null,group});
+      result=await api('/api/atlas-build',{files:await Promise.all(files.map(read)),mode:$('atlasMaskMode').value,padding:Number($('atlasPadding').value),outline:Number($('atlasOutline').value),install:$('atlasInstall').checked,startIndex:$('atlasNumber').value?Number($('atlasNumber').value):null,group});
       active=0;drawResult();
       if(result.registration.installed){try{await onInstalled();}catch(e){result.refreshWarning='Import saved. Reload the editor to refresh the symbol list.';}}
       const target=result.registration.group||result.group;const groupNote=target?` · ${target.created?'New group':'Group'} ${target.name} (${target.id})`:'';
